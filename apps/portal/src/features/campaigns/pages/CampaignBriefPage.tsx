@@ -29,6 +29,23 @@ import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { useAuth } from "@/providers/auth-provider";
 
+// Matches the backend's actual enforced limit (campaigns.controller.ts's
+// reference-assets/upload route — shared by both the Sample Content and
+// Source Assets uploaders below) — checked here so an oversized file is
+// rejected immediately with a clear message instead of only after
+// uploading, where a 413 doesn't always surface a useful error.
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${mb.toFixed(0)}MB`;
+}
+
+function checkFileSize(file: File): string | null {
+  if (file.size <= MAX_UPLOAD_BYTES) return null;
+  return `File is ${formatBytes(file.size)} — max is ${formatBytes(MAX_UPLOAD_BYTES)}.`;
+}
+
 type SourceRequirement = "mandatory" | "optional" | "not_required";
 
 const REQUIREMENT_OPTIONS: { value: SourceRequirement; label: string }[] = [
@@ -227,6 +244,11 @@ export function CampaignBriefPage() {
                 assets={draft.referenceAssets}
                 onChange={(referenceAssets) => update({ referenceAssets })}
                 onUploadFile={async (file, type) => {
+                  const oversizeMessage = checkFileSize(file);
+                  if (oversizeMessage) {
+                    toast(oversizeMessage, "error");
+                    throw new Error(oversizeMessage);
+                  }
                   try {
                     const url = await uploadReferenceAsset(file, type);
                     toast("Sample file uploaded.", "success");
@@ -254,6 +276,11 @@ export function CampaignBriefPage() {
                 assets={draft.sourceAssets}
                 onChange={(sourceAssets) => update({ sourceAssets })}
                 onUploadFile={async (file) => {
+                  const oversizeMessage = checkFileSize(file);
+                  if (oversizeMessage) {
+                    toast(oversizeMessage, "error");
+                    throw new Error(oversizeMessage);
+                  }
                   try {
                     const uploaded = await brandApi.campaigns.uploadReferenceAsset(getToken()!, file);
                     toast("File uploaded.", "success");
