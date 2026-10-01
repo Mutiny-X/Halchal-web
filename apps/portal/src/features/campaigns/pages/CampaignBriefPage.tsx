@@ -29,12 +29,15 @@ import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { useAuth } from "@/providers/auth-provider";
 
-// Matches the backend's actual enforced limit (campaigns.controller.ts's
-// reference-assets/upload route — shared by both the Sample Content and
-// Source Assets uploaders below) — checked here so an oversized file is
-// rejected immediately with a clear message instead of only after
-// uploading, where a 413 doesn't always surface a useful error.
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+// Files at or under this go through uploadReferenceAsset (buffered through
+// the API server, matching campaigns.controller.ts's reference-assets/upload
+// limit) — slower and capped lower, but the backend can actually validate
+// the video is playable before accepting it. Above this, uploadReferenceAssetDirect
+// sends the bytes straight to R2 instead (see api.ts) — no playability
+// check, but scales up to R2's own 5GB single-PUT ceiling instead of
+// being limited by how much the backend can safely buffer in memory.
+const BUFFERED_UPLOAD_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 
 function formatBytes(bytes: number): string {
   const mb = bytes / (1024 * 1024);
@@ -112,7 +115,10 @@ export function CampaignBriefPage() {
     if (!token) {
       throw new Error("Your session expired. Please log in again.");
     }
-    const uploaded = await brandApi.campaigns.uploadReferenceAsset(token, file);
+    const uploaded =
+      file.size > BUFFERED_UPLOAD_THRESHOLD_BYTES
+        ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
+        : await brandApi.campaigns.uploadReferenceAsset(token, file);
     if (uploaded.type !== expectedType) {
       throw new Error(`Please upload a valid ${expectedType} file.`);
     }
@@ -282,7 +288,11 @@ export function CampaignBriefPage() {
                     throw new Error(oversizeMessage);
                   }
                   try {
-                    const uploaded = await brandApi.campaigns.uploadReferenceAsset(getToken()!, file);
+                    const token = getToken()!;
+                    const uploaded =
+                      file.size > BUFFERED_UPLOAD_THRESHOLD_BYTES
+                        ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
+                        : await brandApi.campaigns.uploadReferenceAsset(token, file);
                     toast("File uploaded.", "success");
                     return normalizeUploadUrl(uploaded);
                   } catch (error) {

@@ -850,6 +850,44 @@ const campaignsApi = {
       },
     );
   },
+  // Direct-to-R2 alternative to uploadReferenceAsset above, for files too
+  // large to safely send through the API server (that route buffers the
+  // whole file in the backend's process memory before forwarding it to
+  // R2 — fine up to its 2GB limit, risky well beyond it). Gets a
+  // presigned URL from the backend, then PUTs the file straight to R2
+  // from the browser — the API server never sees the bytes, so size is
+  // bounded only by R2's own 5GB single-PUT ceiling, not backend memory.
+  // Trade-off: unlike uploadReferenceAsset, the backend can't validate
+  // the video is actually playable before accepting it, since the bytes
+  // never pass through there.
+  uploadReferenceAssetDirect: async (
+    token: string,
+    file: File,
+  ): Promise<{ url: string; type: "image" | "video"; name: string }> => {
+    const { uploadUrl, publicUrl } = await apiFetch<{ uploadUrl: string; publicUrl: string }>(
+      "/campaigns/reference-assets/presign-upload",
+      {
+        method: "POST",
+        accessToken: token,
+        body: JSON.stringify({ fileName: file.name, contentType: file.type }),
+      },
+    );
+
+    const putRes = await fetch(uploadUrl, {
+      method: "PUT",
+      body: file,
+      headers: { "Content-Type": file.type },
+    });
+    if (!putRes.ok) {
+      throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status})`);
+    }
+
+    return {
+      url: publicUrl,
+      type: file.type.startsWith("video/") ? "video" : "image",
+      name: file.name,
+    };
+  },
   checkSourceAssetUrl: (token: string, url: string) =>
     apiFetch<{ fetchable: boolean; reason?: string }>("/campaigns/source-assets/check-url", {
       method: "POST",
