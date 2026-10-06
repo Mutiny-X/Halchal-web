@@ -27,9 +27,7 @@ import { cn } from "@/lib/utils";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { sourceLinkProblem } from "@/features/campaigns/lib/source-assets";
-import {
-  checkMediaFile,
-} from "@/features/campaigns/lib/upload-rules";
+import { checkMediaFile, checkSourceFile } from "@/features/campaigns/lib/upload-rules";
 import { useAuth } from "@/providers/auth-provider";
 
 type SourceRequirement = "mandatory" | "optional" | "not_required";
@@ -272,7 +270,7 @@ export function CampaignBriefPage() {
                   }))
                 }
                 onUploadFile={async (file) => {
-                  const oversizeMessage = checkMediaFile(file);
+                  const oversizeMessage = checkSourceFile(file);
                   if (oversizeMessage) {
                     toast(oversizeMessage, "error");
                     throw new Error(oversizeMessage);
@@ -280,7 +278,7 @@ export function CampaignBriefPage() {
                   try {
                     const token = getToken()!;
                     const uploaded =
-                      await brandApi.campaigns.uploadReferenceAsset(token, file);
+                      await brandApi.campaigns.uploadSourceAsset(token, file);
                     toast("File uploaded.", "success");
                     return normalizeUploadUrl(uploaded);
                   } catch (error) {

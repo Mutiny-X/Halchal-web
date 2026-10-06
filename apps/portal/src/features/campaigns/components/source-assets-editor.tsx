@@ -164,7 +164,7 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                       ) : (
                         <Upload className="h-4 w-4" />
                       )}
-                      {isUploading ? "Uploading…" : "Choose a video or image file"}
+                      {isUploading ? "Uploading…" : "Choose a video or image file (max 3 GB)"}
                       <input
                         type="file"
                         accept={MEDIA_ACCEPT}

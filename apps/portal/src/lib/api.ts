@@ -234,6 +234,7 @@ export async function apiFetchForm<T>(
 export type DirectUploadPurpose =
   | "campaign-cover"
   | "campaign-asset"
+  | "campaign-source"
   | "brand-logo"
   | "admin-brand-logo"
   | "avatar"
@@ -980,6 +981,12 @@ const campaignsApi = {
   /** Sample content and source files, any size up to 5 GB — straight to R2. */
   uploadReferenceAsset: (token: string, file: File) =>
     uploadDirect(token, file, "campaign-asset", {
+      legacy: async () =>
+        asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
+    }),
+  /** "Upload from device" source files — up to 3 GB, straight to R2. */
+  uploadSourceAsset: (token: string, file: File) =>
+    uploadDirect(token, file, "campaign-source", {
       legacy: async () =>
         asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
     }),
