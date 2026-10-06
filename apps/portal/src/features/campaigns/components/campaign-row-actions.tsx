@@ -76,7 +76,7 @@ export function getCampaignMenuActions(campaign: Campaign): CampaignMenuAction[]
                 label: "Delete",
                 title: "Delete",
                 description:
-                  "Permanently remove this campaign and all its uploaded files (cover, sample content, source files). This cannot be undone.",
+                  "Permanently remove this campaign, its uploaded files and any creators' submissions and drafts for it. Payments already made to creators stay in their wallets. This cannot be undone.",
                 confirmLabel: "Delete",
                 variant: "destructive" as const,
               },
@@ -133,7 +133,7 @@ export function getCampaignMenuActions(campaign: Campaign): CampaignMenuAction[]
               label: "Delete",
               title: "Delete",
               description:
-                "Permanently remove this campaign and all its uploaded files (cover, sample content, source files). This cannot be undone.",
+                "Permanently remove this campaign, its uploaded files and any creators' submissions and drafts for it. Payments already made to creators stay in their wallets. This cannot be undone.",
               confirmLabel: "Delete",
               variant: "destructive",
             },
