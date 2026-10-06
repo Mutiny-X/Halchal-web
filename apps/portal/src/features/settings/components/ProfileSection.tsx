@@ -62,7 +62,7 @@ function AvatarUpload({ avatarUrl, name }: { avatarUrl: string | null | undefine
         >
           {uploadMutation.isPending ? "Uploading…" : "Change photo"}
         </Button>
-        <p className="mt-1 text-xs text-muted">JPG or PNG, up to 5MB.</p>
+        <p className="mt-1 text-xs text-muted">JPG, PNG or WebP, up to 5MB.</p>
       </div>
     </div>
   );
