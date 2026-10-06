@@ -37,6 +37,8 @@ import { adminApi, portalApi, ApiError, type AutoReviewResult, type CampaignCrea
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { campaignStatusLabel, isLockedForReview } from "@/features/campaigns/lib/campaign-status";
 import { CampaignReviewBanner } from "@/features/campaigns/components/campaign-review-banner";
+import { UploadProgressView } from "@/components/ui/upload-progress";
+import type { UploadProgress } from "@/lib/api";
 
 type Tab = "overview" | "clippers" | "board" | "submissions" | "proof" | "analytics" | "payouts";
 
@@ -187,8 +189,12 @@ function SubmissionDetailModal({
     onError: (err) => toast(err instanceof ApiError ? err.message : "Rejection failed", "error"),
   });
 
+  const [draftCopyProgress, setDraftCopyProgress] = useState<UploadProgress | null>(null);
   const uploadAdminDraftMutation = useMutation({
-    mutationFn: (file: File) => portalApi.submissions.uploadAdminDraftCopy(getToken()!, deliverableId, file),
+    mutationFn: (file: File) => {
+      setDraftCopyProgress(null);
+      return portalApi.submissions.uploadAdminDraftCopy(getToken()!, deliverableId, file, setDraftCopyProgress);
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["submission", "deliverable", deliverableId] });
       toast("Uploaded — automated review will check this now");
@@ -365,6 +371,11 @@ function SubmissionDetailModal({
                       ? "A copy is on file — automated review can check this submission."
                       : "This is a Google Drive link — automated review can't fetch it directly. Download it from the Drive link above, then upload a copy here."}
                   </p>
+                  {uploadAdminDraftMutation.isPending && (
+                    <div className="mt-3 max-w-sm rounded-lg border border-border bg-surface px-3 py-2.5">
+                      <UploadProgressView progress={draftCopyProgress} />
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => adminDraftInputRef.current?.click()}

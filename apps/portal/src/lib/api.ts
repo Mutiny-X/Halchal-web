@@ -257,11 +257,55 @@ export type DirectUploadResult = {
  * The file never passes through the API server. `legacy` is only used when
  * the server has no object storage (local development).
  */
+/** Where an upload is: sending bytes to storage, then the server checking
+ * the file (a video's check can take a few seconds). */
+export type UploadProgress =
+  | { phase: "uploading"; loaded: number; total: number; percent: number; bytesPerSecond: number | null; secondsLeft: number | null }
+  | { phase: "checking" };
+export type OnUploadProgress = (progress: UploadProgress) => void;
+
+/** PUT with progress events (fetch can't report upload progress). */
+function putWithProgress(
+  url: string,
+  file: File,
+  headers: Record<string, string>,
+  onProgress?: OnUploadProgress,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    const started = Date.now();
+    let lastEmit = 0;
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const now = Date.now();
+      if (now - lastEmit < 200 && event.loaded < event.total) return; // ~5 updates/second
+      lastEmit = now;
+      const total = event.lengthComputable ? event.total : file.size;
+      const elapsed = (now - started) / 1000;
+      const bytesPerSecond = elapsed >= 1 && event.loaded > 0 ? event.loaded / elapsed : null;
+      onProgress({
+        phase: "uploading",
+        loaded: event.loaded,
+        total,
+        percent: total > 0 ? Math.min(100, Math.floor((event.loaded / total) * 100)) : 0,
+        bytesPerSecond,
+        secondsLeft: bytesPerSecond ? Math.max(0, Math.round((total - event.loaded) / bytesPerSecond)) : null,
+      });
+    };
+    xhr.onload = () => resolve(xhr.status);
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.onabort = () => reject(new Error("aborted"));
+    xhr.send(file);
+  });
+}
+
 async function uploadDirect<T extends object = object>(
   token: string,
   file: File,
   purpose: DirectUploadPurpose,
-  opts: { deliverableId?: string; legacy?: () => Promise<DirectUploadResult & T> } = {},
+  opts: { deliverableId?: string; legacy?: () => Promise<DirectUploadResult & T>; onProgress?: OnUploadProgress } = {},
 ): Promise<DirectUploadResult & T> {
   let presign: { uploadId: string; uploadUrl: string; headers: Record<string, string> };
   try {
@@ -283,17 +327,19 @@ async function uploadDirect<T extends object = object>(
     throw error;
   }
 
-  let putRes: Response;
+  opts.onProgress?.({ phase: "uploading", loaded: 0, total: file.size, percent: 0, bytesPerSecond: null, secondsLeft: null });
+  let putStatus: number;
   try {
-    putRes = await fetch(presign.uploadUrl, { method: "PUT", body: file, headers: presign.headers });
+    putStatus = await putWithProgress(presign.uploadUrl, file, presign.headers, opts.onProgress);
   } catch {
     // The API answered the step before, so this is the browser → storage
     // leg (connection dropped, or storage refusing this site).
     throw new ApiError("NETWORK_ERROR", "Couldn't upload the file to storage. Check your connection and try again.");
   }
-  if (!putRes.ok) {
-    throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status}) — please try again.`, putRes.status);
+  if (putStatus < 200 || putStatus >= 300) {
+    throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putStatus}) — please try again.`, putStatus);
   }
+  opts.onProgress?.({ phase: "checking" });
 
   return apiFetch<DirectUploadResult & T>("/uploads/direct/complete", {
     method: "POST",
@@ -1064,14 +1110,16 @@ const campaignsApi = {
       accessToken: token,
     }),
   /** Sample content and source files, up to 4.9 GB (R2 single-upload ceiling) — straight to R2. */
-  uploadReferenceAsset: (token: string, file: File) =>
+  uploadReferenceAsset: (token: string, file: File, onProgress?: OnUploadProgress) =>
     uploadDirect(token, file, "campaign-asset", {
+      onProgress,
       legacy: async () =>
         asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
     }),
   /** "Upload from device" source files — up to 3 GB, straight to R2. */
-  uploadSourceAsset: (token: string, file: File) =>
+  uploadSourceAsset: (token: string, file: File, onProgress?: OnUploadProgress) =>
     uploadDirect(token, file, "campaign-source", {
+      onProgress,
       legacy: async () =>
         asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
     }),
@@ -1081,8 +1129,9 @@ const campaignsApi = {
       accessToken: token,
       body: JSON.stringify({ url }),
     }),
-  uploadCoverImage: (token: string, file: File) =>
+  uploadCoverImage: (token: string, file: File, onProgress?: OnUploadProgress) =>
     uploadDirect(token, file, "campaign-cover", {
+      onProgress,
       legacy: async () => asResult(await legacyForm<{ url: string; path?: string; name: string }>("/campaigns/cover/upload", token, file), file),
     }),
 };
@@ -1109,9 +1158,10 @@ const submissionsApi = {
         body: JSON.stringify(body),
       },
     ),
-  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File) =>
+  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File, onProgress?: OnUploadProgress) =>
     uploadDirect<{ id: string; adminUploadedDraftUrl: string }>(token, file, "admin-draft-copy", {
       deliverableId,
+      onProgress,
       legacy: async () => {
         const r = await legacyForm<{ id: string; adminUploadedDraftUrl: string }>(
           `/submissions/deliverables/${deliverableId}/admin-draft-copy`,

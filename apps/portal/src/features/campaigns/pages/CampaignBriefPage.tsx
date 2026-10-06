@@ -29,6 +29,7 @@ import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { sourceLinkProblem } from "@/features/campaigns/lib/source-assets";
 import { checkMediaFile, checkSourceFile } from "@/features/campaigns/lib/upload-rules";
 import { useAuth } from "@/providers/auth-provider";
+import type { OnUploadProgress } from "@/lib/api";
 
 type SourceRequirement = "mandatory" | "optional" | "not_required";
 
@@ -90,13 +91,14 @@ export function CampaignBriefPage() {
   const uploadReferenceAsset = async (
     file: File,
     expectedType: "image" | "video",
+    onProgress?: OnUploadProgress,
   ): Promise<string> => {
     const token = getToken();
     if (!token) {
       throw new Error("Your session expired. Please log in again.");
     }
     const uploaded =
-      await brandApi.campaigns.uploadReferenceAsset(token, file);
+      await brandApi.campaigns.uploadReferenceAsset(token, file, onProgress);
     if (uploaded.type !== expectedType) {
       throw new Error(`Please upload a valid ${expectedType} file.`);
     }
@@ -235,14 +237,14 @@ export function CampaignBriefPage() {
                     referenceAssets: typeof next === "function" ? next(d.referenceAssets) : next,
                   }))
                 }
-                onUploadFile={async (file, type) => {
+                onUploadFile={async (file, type, onProgress) => {
                   const oversizeMessage = checkMediaFile(file, type);
                   if (oversizeMessage) {
                     toast(oversizeMessage, "error");
                     throw new Error(oversizeMessage);
                   }
                   try {
-                    const url = await uploadReferenceAsset(file, type);
+                    const url = await uploadReferenceAsset(file, type, onProgress);
                     toast("Sample file uploaded.", "success");
                     return url;
                   } catch (error) {
@@ -271,7 +273,7 @@ export function CampaignBriefPage() {
                     sourceAssets: typeof next === "function" ? next(d.sourceAssets) : next,
                   }))
                 }
-                onUploadFile={async (file) => {
+                onUploadFile={async (file, onProgress) => {
                   const oversizeMessage = checkSourceFile(file);
                   if (oversizeMessage) {
                     toast(oversizeMessage, "error");
@@ -280,7 +282,7 @@ export function CampaignBriefPage() {
                   try {
                     const token = getToken()!;
                     const uploaded =
-                      await brandApi.campaigns.uploadSourceAsset(token, file);
+                      await brandApi.campaigns.uploadSourceAsset(token, file, onProgress);
                     toast("File uploaded.", "success");
                     return normalizeUploadUrl(uploaded);
                   } catch (error) {
