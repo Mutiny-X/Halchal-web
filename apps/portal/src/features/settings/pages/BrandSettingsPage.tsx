@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -113,7 +114,7 @@ export function BrandSettingsPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept={COVER_ACCEPT}
               className="hidden"
               onChange={handleFileChange}
             />

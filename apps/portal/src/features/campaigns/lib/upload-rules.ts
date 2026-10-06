@@ -7,10 +7,8 @@
 const MB = 1024 * 1024;
 
 export const COVER_MAX_BYTES = 10 * MB;
-/** At or under this, files go through the API (which checks the real file
- * type and that videos play). Above it, straight to storage. */
-export const BUFFERED_UPLOAD_MAX_BYTES = 100 * MB;
-/** Storage's single-upload ceiling for the direct path. */
+/** Every upload goes straight from the browser to storage (never through
+ * the API server); this is storage's single-upload ceiling. */
 export const DIRECT_UPLOAD_MAX_BYTES = 5 * 1024 * MB;
 
 export const COVER_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -50,9 +48,4 @@ export function checkMediaFile(file: File, kind?: "image" | "video"): string | n
     return `File is ${formatBytes(file.size)} — max is ${formatBytes(DIRECT_UPLOAD_MAX_BYTES)}.`;
   }
   return null;
-}
-
-/** Whether a file takes the direct-to-storage path instead of the API. */
-export function usesDirectUpload(file: File): boolean {
-  return file.size > BUFFERED_UPLOAD_MAX_BYTES;
 }

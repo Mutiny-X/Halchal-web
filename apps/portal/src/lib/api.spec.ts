@@ -102,3 +102,77 @@ describe("API client error shapes", () => {
     expect(err.status).toBe(400);
   });
 });
+
+describe("direct uploads: browser → storage, never through the API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const file = () => new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" });
+
+  it("presign → PUT straight to storage → complete; the API never receives the bytes", async () => {
+    const calls: Array<{ url: string; method?: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        calls.push({ url, method: init.method, body: init.body });
+        if (url.endsWith("/uploads/direct/presign")) {
+          return json(200, { success: true, error: null, data: { uploadId: "ticket", uploadUrl: "https://r2.example/pending/x.png?sig", headers: { "Content-Type": "image/png" } } });
+        }
+        if (url.startsWith("https://r2.example/")) return new Response(null, { status: 200 });
+        if (url.endsWith("/uploads/direct/complete")) {
+          return json(200, { success: true, error: null, data: { url: "https://pub/cover-images/x.png", path: "https://pub/cover-images/x.png", name: "cover.png", type: "image", contentType: "image/png" } });
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    const { portalApi } = await import("./api");
+    const out = await portalApi.campaigns.uploadCoverImage("tok", file());
+
+    expect(calls.map((c) => c.url.replace(/^https?:\/\/[^/]+/, ""))).toEqual([
+      "/uploads/direct/presign",
+      "/pending/x.png?sig",
+      "/uploads/direct/complete",
+    ]);
+    expect(JSON.parse(calls[0].body as string)).toMatchObject({ purpose: "campaign-cover", contentType: "image/png", size: 3 });
+    expect(calls[1]).toMatchObject({ method: "PUT" });
+    expect(calls[1].body).toBeInstanceOf(File); // the bytes went to storage…
+    expect(calls.filter((c) => c.body instanceof File || c.body instanceof FormData)).toHaveLength(1); // …and only there
+    expect(out.url).toBe("https://pub/cover-images/x.png");
+  });
+
+  it("a failed PUT is a readable error and complete is never called", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      if (url.endsWith("/presign")) return json(200, { success: true, error: null, data: { uploadId: "t", uploadUrl: "https://r2.example/p", headers: {} } });
+      return new Response("SignatureDoesNotMatch", { status: 403 });
+    }));
+    const { portalApi } = await import("./api");
+    const err = await portalApi.campaigns.uploadCoverImage("tok", file()).catch((e) => e);
+    expect(err.code).toBe("UPLOAD_FAILED");
+    expect(urls.some((u) => u.endsWith("/complete"))).toBe(false);
+  });
+
+  it("only without object storage (local dev) does it fall back to the old route", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      if (url.endsWith("/presign")) return json(503, { success: false, data: null, error: { code: "DIRECT_UPLOAD_UNAVAILABLE", message: "no storage" } });
+      return json(200, { success: true, error: null, data: { url: "/uploads/cover-images/a.png", path: "/uploads/cover-images/a.png", name: "cover.png" } });
+    }));
+    const { portalApi } = await import("./api");
+    const out = await portalApi.campaigns.uploadCoverImage("tok", file());
+    expect(urls.at(-1)).toMatch(/\/campaigns\/cover\/upload$/);
+    expect(out.path).toBe("/uploads/cover-images/a.png");
+  });
+
+  it("any other presign error (e.g. file too large) does NOT fall back", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      return json(400, { success: false, data: null, error: { code: "VALIDATION_ERROR", message: "File is too large — max is 10 MB" } });
+    }));
+    const { portalApi } = await import("./api");
+    const err = await portalApi.campaigns.uploadCoverImage("tok", file()).catch((e) => e);
+    expect(err.message).toMatch(/too large/);
+    expect(urls).toHaveLength(1);
+  });
+});

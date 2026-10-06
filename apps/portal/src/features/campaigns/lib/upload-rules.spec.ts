@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkCoverFile, checkMediaFile, usesDirectUpload } from "./upload-rules";
+import { checkCoverFile, checkMediaFile } from "./upload-rules";
 
 const MB = 1024 * 1024;
 const fakeFile = (type: string, size: number) => ({ type, size }) as File;
@@ -20,10 +20,5 @@ describe("upload rules (match the API)", () => {
     expect(checkMediaFile(fakeFile("text/html", 1))).not.toBeNull();
     expect(checkMediaFile(fakeFile("video/mp4", 1), "image")).toMatch(/Images must be/);
     expect(checkMediaFile(fakeFile("video/mp4", 6 * 1024 * MB))).toMatch(/max is 5.0GB/);
-  });
-
-  it("files over 100 MB go straight to storage, not through the API's memory", () => {
-    expect(usesDirectUpload(fakeFile("video/mp4", 100 * MB))).toBe(false);
-    expect(usesDirectUpload(fakeFile("video/mp4", 100 * MB + 1))).toBe(true);
   });
 });

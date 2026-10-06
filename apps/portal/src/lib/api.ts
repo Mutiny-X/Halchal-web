@@ -231,6 +231,87 @@ export async function apiFetchForm<T>(
   });
 }
 
+export type DirectUploadPurpose =
+  | "campaign-cover"
+  | "campaign-asset"
+  | "brand-logo"
+  | "admin-brand-logo"
+  | "avatar"
+  | "admin-draft-copy";
+
+export type DirectUploadResult = {
+  url: string;
+  path: string;
+  name: string;
+  type: "image" | "video";
+  contentType: string;
+};
+
+/**
+ * Every file a brand/staff/admin uploads goes browser → R2 directly:
+ *  1. the API signs a PUT for this exact file (type + byte size),
+ *  2. the browser sends the bytes straight to storage,
+ *  3. the API checks the first few KB and moves it into place.
+ * The file never passes through the API server. `legacy` is only used when
+ * the server has no object storage (local development).
+ */
+async function uploadDirect<T extends object = object>(
+  token: string,
+  file: File,
+  purpose: DirectUploadPurpose,
+  opts: { deliverableId?: string; legacy?: () => Promise<DirectUploadResult & T> } = {},
+): Promise<DirectUploadResult & T> {
+  let presign: { uploadId: string; uploadUrl: string; headers: Record<string, string> };
+  try {
+    presign = await apiFetch("/uploads/direct/presign", {
+      method: "POST",
+      accessToken: token,
+      body: JSON.stringify({
+        purpose,
+        contentType: file.type,
+        size: file.size,
+        fileName: file.name,
+        deliverableId: opts.deliverableId,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "DIRECT_UPLOAD_UNAVAILABLE" && opts.legacy) {
+      return opts.legacy();
+    }
+    throw error;
+  }
+
+  let putRes: Response;
+  try {
+    putRes = await fetch(presign.uploadUrl, { method: "PUT", body: file, headers: presign.headers });
+  } catch {
+    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+  }
+  if (!putRes.ok) {
+    throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status}) — please try again.`, putRes.status);
+  }
+
+  return apiFetch<DirectUploadResult & T>("/uploads/direct/complete", {
+    method: "POST",
+    accessToken: token,
+    body: JSON.stringify({ uploadId: presign.uploadId }),
+  });
+}
+
+const asResult = (r: { url: string; path?: string; name?: string; type?: "image" | "video" }, file: File): DirectUploadResult => ({
+  url: r.url,
+  path: r.path ?? r.url,
+  name: r.name ?? file.name,
+  type: r.type ?? (file.type.startsWith("video/") ? "video" : "image"),
+  contentType: file.type,
+});
+
+function legacyForm<T>(path: string, token: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetchForm<T>(path, { method: "POST", accessToken: token, body: form });
+}
+
 type RegisterPayload = {
   email: string;
   password: string;
@@ -896,79 +977,22 @@ const campaignsApi = {
       method: "DELETE",
       accessToken: token,
     }),
-  uploadReferenceAsset: (token: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ url: string; path?: string; type: "image" | "video"; name: string }>(
-      "/campaigns/reference-assets/upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
-      },
-    );
-  },
-  // Direct-to-R2 alternative to uploadReferenceAsset above, for files too
-  // large to safely send through the API server (that route buffers the
-  // whole file in the backend's process memory before forwarding it to
-  // R2 — fine up to its 2GB limit, risky well beyond it). Gets a
-  // presigned URL from the backend, then PUTs the file straight to R2
-  // from the browser — the API server never sees the bytes, so size is
-  // bounded only by R2's own 5GB single-PUT ceiling, not backend memory.
-  // Trade-off: unlike uploadReferenceAsset, the backend can't validate
-  // the video is actually playable before accepting it, since the bytes
-  // never pass through there.
-  uploadReferenceAssetDirect: async (
-    token: string,
-    file: File,
-  ): Promise<{ url: string; type: "image" | "video"; name: string }> => {
-    const { uploadUrl, publicUrl } = await apiFetch<{ uploadUrl: string; publicUrl: string }>(
-      "/campaigns/reference-assets/presign-upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: JSON.stringify({ fileName: file.name, contentType: file.type }),
-      },
-    );
-
-    let putRes: Response;
-    try {
-      putRes = await fetch(uploadUrl, {
-        method: "PUT",
-        body: file,
-        headers: { "Content-Type": file.type },
-      });
-    } catch {
-      throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
-    }
-    if (!putRes.ok) {
-      throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status})`);
-    }
-
-    return {
-      url: publicUrl,
-      type: file.type.startsWith("video/") ? "video" : "image",
-      name: file.name,
-    };
-  },
+  /** Sample content and source files, any size up to 5 GB — straight to R2. */
+  uploadReferenceAsset: (token: string, file: File) =>
+    uploadDirect(token, file, "campaign-asset", {
+      legacy: async () =>
+        asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
+    }),
   checkSourceAssetUrl: (token: string, url: string) =>
     apiFetch<{ fetchable: boolean; reason?: string }>("/campaigns/source-assets/check-url", {
       method: "POST",
       accessToken: token,
       body: JSON.stringify({ url }),
     }),
-  uploadCoverImage: (token: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ url: string; path?: string; name: string }>(
-      "/campaigns/cover/upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
-      },
-    );
-  },
+  uploadCoverImage: (token: string, file: File) =>
+    uploadDirect(token, file, "campaign-cover", {
+      legacy: async () => asResult(await legacyForm<{ url: string; path?: string; name: string }>("/campaigns/cover/upload", token, file), file),
+    }),
 };
 
 const submissionsApi = {
@@ -993,18 +1017,18 @@ const submissionsApi = {
         body: JSON.stringify(body),
       },
     ),
-  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ id: string; adminUploadedDraftUrl: string }>(
-      `/submissions/deliverables/${deliverableId}/admin-draft-copy`,
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
+  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File) =>
+    uploadDirect<{ id: string; adminUploadedDraftUrl: string }>(token, file, "admin-draft-copy", {
+      deliverableId,
+      legacy: async () => {
+        const r = await legacyForm<{ id: string; adminUploadedDraftUrl: string }>(
+          `/submissions/deliverables/${deliverableId}/admin-draft-copy`,
+          token,
+          file,
+        );
+        return { ...asResult({ url: r.adminUploadedDraftUrl }, file), ...r };
       },
-    );
-  },
+    }),
   approveProof: (token: string, deliverableId: string) =>
     apiFetch<{ id: string; status: string }>(
       `/submissions/deliverables/${deliverableId}/approve-proof`,
@@ -1109,25 +1133,16 @@ export const portalApi = {
       accessToken: token,
     }),
 
-  uploadBrandLogo: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/users/me/brand-logo", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
+  uploadBrandLogo: (token: string, file: File) =>
+    uploadDirect(token, file, "brand-logo", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/users/me/brand-logo", token, file), file),
+    }),
 
-  uploadAvatar: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/users/me/avatar", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
+  /** Also sets the caller's profile photo (server-side, on completion). */
+  uploadAvatar: (token: string, file: File) =>
+    uploadDirect(token, file, "avatar", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/users/me/avatar", token, file), file),
+    }),
 
   stats: (token: string) =>
     apiFetch<BrandStats>("/submissions/stats", { accessToken: token }),
@@ -1366,15 +1381,10 @@ export const adminApi = {
       accessToken: token,
     }),
 
-  uploadBrandLogo: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/admin/brand-logo", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
+  uploadBrandLogo: (token: string, file: File) =>
+    uploadDirect(token, file, "admin-brand-logo", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/admin/brand-logo", token, file), file),
+    }),
 
   createBrand: (token: string, body: { companyName: string; companyEmail: string; pocName?: string; pocPhone?: string; pocEmail?: string; logoUrl?: string }) =>
     apiFetch<AdminBrand & { tempPassword: string; companyEmail?: string; pocName?: string; pocPhone?: string; pocEmail?: string }>("/admin/brands", {

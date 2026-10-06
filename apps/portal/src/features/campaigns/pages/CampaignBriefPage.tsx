@@ -29,7 +29,6 @@ import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { sourceLinkProblem } from "@/features/campaigns/lib/source-assets";
 import {
   checkMediaFile,
-  usesDirectUpload,
 } from "@/features/campaigns/lib/upload-rules";
 import { useAuth } from "@/providers/auth-provider";
 
@@ -99,9 +98,7 @@ export function CampaignBriefPage() {
       throw new Error("Your session expired. Please log in again.");
     }
     const uploaded =
-      usesDirectUpload(file)
-        ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
-        : await brandApi.campaigns.uploadReferenceAsset(token, file);
+      await brandApi.campaigns.uploadReferenceAsset(token, file);
     if (uploaded.type !== expectedType) {
       throw new Error(`Please upload a valid ${expectedType} file.`);
     }
@@ -283,9 +280,7 @@ export function CampaignBriefPage() {
                   try {
                     const token = getToken()!;
                     const uploaded =
-                      usesDirectUpload(file)
-                        ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
-                        : await brandApi.campaigns.uploadReferenceAsset(token, file);
+                      await brandApi.campaigns.uploadReferenceAsset(token, file);
                     toast("File uploaded.", "success");
                     return normalizeUploadUrl(uploaded);
                   } catch (error) {

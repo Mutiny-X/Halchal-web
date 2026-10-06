@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -256,7 +257,7 @@ function EditBrandModal({ brand, onClose }: { brand: AdminBrandDetail; onClose: 
               </div>
             )}
             <div>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              <input ref={fileInputRef} type="file" accept={COVER_ACCEPT} className="hidden" onChange={handleFileChange} />
               <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
                 {pendingLogoFile ? "Image selected ✓" : "Change logo"}
               </Button>
