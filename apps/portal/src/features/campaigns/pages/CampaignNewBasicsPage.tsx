@@ -7,7 +7,6 @@ import {
   ChevronDown,
   Globe2,
   Lightbulb,
-  Loader2,
   MapPin,
   Upload,
 } from "lucide-react";
@@ -30,6 +29,8 @@ import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 import { latestStartDate, startDateProblem, todayInIndia } from "@/features/campaigns/lib/start-date";
 import { checkCoverFile, COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
+import { UploadProgressView } from "@/components/ui/upload-progress";
+import type { UploadProgress } from "@/lib/api";
 
 const CATEGORY_OPTIONS = [
   "Fashion",
@@ -62,6 +63,7 @@ export function CampaignNewBasicsPage() {
   const { toast } = useToast();
   const coverInputRef = useRef<HTMLInputElement>(null);
   const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverProgress, setCoverProgress] = useState<UploadProgress | null>(null);
   const selectedPlatform = draft.platforms[0];
 
   // "Other" is a picker trigger, not a real stored value — once chosen (or
@@ -105,7 +107,8 @@ export function CampaignNewBasicsPage() {
     }
     setUploadingCover(true);
     try {
-      const uploaded = await brandApi.campaigns.uploadCoverImage(token, file);
+      setCoverProgress(null);
+      const uploaded = await brandApi.campaigns.uploadCoverImage(token, file, setCoverProgress);
       update({ coverImageUrl: normalizeUploadUrl(uploaded) });
       toast("Cover image uploaded.", "success");
     } catch (error) {
@@ -165,24 +168,20 @@ export function CampaignNewBasicsPage() {
                   )}
                 </button>
 
-                <button
-                  type="button"
-                  disabled={uploadingCover}
-                  onClick={() => coverInputRef.current?.click()}
-                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-medium text-foreground transition hover:bg-surface-variant"
-                >
-                  {uploadingCover ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Uploading…
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4" />
-                      {draft.coverImageUrl ? "Replace image" : "Upload image"}
-                    </>
-                  )}
-                </button>
+                {uploadingCover ? (
+                  <div className="mt-3 rounded-xl border border-border px-3 py-2.5">
+                    <UploadProgressView progress={coverProgress} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => coverInputRef.current?.click()}
+                    className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-medium text-foreground transition hover:bg-surface-variant"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {draft.coverImageUrl ? "Replace image" : "Upload image"}
+                  </button>
+                )}
                 <input
                   ref={coverInputRef}
                   type="file"

@@ -11,6 +11,8 @@ import {
   type SourceAssetType,
   sourceLinkProblem,
 } from "@/features/campaigns/lib/source-assets";
+import { UploadProgressView, useWarnWhileUploading } from "@/components/ui/upload-progress";
+import type { OnUploadProgress, UploadProgress } from "@/lib/api";
 const typeOptions: {
   value: SourceAssetType;
   label: string;
@@ -31,12 +33,14 @@ type SourceAssetsEditorProps = {
   assets: SourceAsset[];
   /** Pass a function to apply a change to the LATEST list (see updateAsset). */
   onChange: (next: SourceAsset[] | ((current: SourceAsset[]) => SourceAsset[])) => void;
-  onUploadFile: (file: File) => Promise<string>;
+  onUploadFile: (file: File, onProgress: OnUploadProgress) => Promise<string>;
   onCheckUrl: (url: string) => Promise<{ fetchable: boolean; reason?: string }>;
 };
 
 export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl }: SourceAssetsEditorProps) {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  useWarnWhileUploading(uploadingId !== null);
   const [urlChecks, setUrlChecks] = useState<Record<string, UrlCheckState>>({});
 
   // Changes apply to the latest list — see ReferenceAssetsEditor.updateAsset.
@@ -57,8 +61,9 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
   const onSelectFile = async (asset: SourceAsset, file: File | undefined): Promise<void> => {
     if (!file) return;
     setUploadingId(asset.id);
+    setProgress(null);
     try {
-      const url = await onUploadFile(file);
+      const url = await onUploadFile(file, setProgress);
       onChange((current) =>
         current.map((a) =>
           a.id === asset.id ? { ...a, url, label: a.label.trim() ? a.label : file.name } : a,
@@ -68,6 +73,7 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
       // onUploadFile has already shown the reason to the user.
     } finally {
       setUploadingId(null);
+      setProgress(null);
     }
   };
 
@@ -141,7 +147,11 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
               {asset.type === "upload" ? (
                 <div className="space-y-1">
                   <Label className="text-xs text-muted">File</Label>
-                  {asset.url ? (
+                  {isUploading ? (
+                    <div className="rounded-lg border border-border bg-background px-3 py-3">
+                      <UploadProgressView progress={progress} />
+                    </div>
+                  ) : asset.url ? (
                     <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm">
                       <span className="truncate text-foreground">{asset.label || "Uploaded file"}</span>
                       <label className="shrink-0 cursor-pointer text-xs font-medium text-primary hover:underline">
