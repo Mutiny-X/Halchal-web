@@ -38,3 +38,30 @@ export function toApiSourceAssets(assets: SourceAsset[]) {
     }))
     .filter((asset) => asset.url.length > 0);
 }
+
+const DRIVE_HOSTS = ["drive.google.com", "docs.google.com"];
+const YOUTUBE_HOSTS = ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"];
+
+/** Mirrors the API's asset-url-rules: a link must point where its type
+ * says. Returns a message to show under the field, or null when fine. */
+export function sourceLinkProblem(type: SourceAssetType, raw: string): string | null {
+  const value = raw.trim();
+  if (!value || type === "upload") return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "Enter the full link, starting with https://";
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return "Enter the full link, starting with https://";
+  }
+  const host = url.hostname.toLowerCase();
+  if (type === "drive" && !DRIVE_HOSTS.includes(host)) {
+    return "This must be a Google Drive link (https://drive.google.com/...)";
+  }
+  if (type === "youtube" && !YOUTUBE_HOSTS.includes(host)) {
+    return "This must be a YouTube link (youtube.com or youtu.be)";
+  }
+  return null;
+}

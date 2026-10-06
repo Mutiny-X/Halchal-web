@@ -35,6 +35,8 @@ import { formatInr } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { adminApi, portalApi, ApiError, type AutoReviewResult, type CampaignCreatorPayout } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
+import { campaignStatusLabel, isLockedForReview } from "@/features/campaigns/lib/campaign-status";
+import { CampaignReviewBanner } from "@/features/campaigns/components/campaign-review-banner";
 
 type Tab = "overview" | "clippers" | "board" | "submissions" | "proof" | "analytics" | "payouts";
 
@@ -50,6 +52,7 @@ const TABS: { id: Tab; label: string }[] = [
 const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
   live:   "bg-emerald-500 text-white",
   draft:  "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-600 text-white",
 };
@@ -812,7 +815,14 @@ export function CampaignDetailPage() {
   if (isPending || !campaign) return <DetailPageSkeleton />;
 
   const editPath = id && campaign.status !== "closed" ? getWizardEditPath(id, isAdmin) : null;
-  const editLabel = campaign.status === "draft" ? "Continue editing" : "Edit campaign";
+  const editLabel =
+    campaign.status === "draft"
+      ? "Continue editing"
+      : isLockedForReview(campaign.status, isAdmin)
+        ? "View submission"
+        : campaign.status === "pending_review"
+          ? "Review / edit"
+          : "Edit campaign";
   // Staff arrive via a specific brand's page, not a generic campaigns list — fall back to browser history for them.
   const backTo = isAdmin ? "/admin/campaigns" : role === "brand" ? "/campaigns" : undefined;
 
@@ -872,6 +882,8 @@ export function CampaignDetailPage() {
     <div className="space-y-5">
       <BackButton to={backTo} label="Back to campaigns" />
 
+      <CampaignReviewBanner campaign={campaign} isAdmin={isAdmin} />
+
       {/* ── Side-by-side hero ── */}
       <div className="overflow-hidden rounded-2xl border border-border bg-surface">
         <div className="flex items-start gap-0">
@@ -899,7 +911,7 @@ export function CampaignDetailPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${campaignStatusStyle}`}>
-                    {campaign.status}
+                    {campaignStatusLabel(campaign.status)}
                   </span>
                   {campaign.platforms?.map(p => (
                     <span key={p} className="rounded-full bg-surface-variant px-2 py-0.5 text-[10px] text-muted">
@@ -926,7 +938,7 @@ export function CampaignDetailPage() {
                     Resume
                   </Button>
                 )}
-                {campaign.status !== "draft" && (
+                {campaign.status !== "draft" && campaign.status !== "pending_review" && (
                   <Button size="sm" variant="outline" onClick={() => void copyShareLink()}>
                     Share
                   </Button>

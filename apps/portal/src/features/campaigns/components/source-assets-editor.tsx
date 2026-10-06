@@ -3,11 +3,13 @@ import { AlertTriangle, CheckCircle2, HardDrive, Loader2, Trash2, Upload, Youtub
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MEDIA_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { Label } from "@/components/ui/label";
 import {
   createSourceAsset,
   type SourceAsset,
   type SourceAssetType,
+  sourceLinkProblem,
 } from "@/features/campaigns/lib/source-assets";
 const typeOptions: {
   value: SourceAssetType;
@@ -27,7 +29,8 @@ type UrlCheckState =
 
 type SourceAssetsEditorProps = {
   assets: SourceAsset[];
-  onChange: (assets: SourceAsset[]) => void;
+  /** Pass a function to apply a change to the LATEST list (see updateAsset). */
+  onChange: (next: SourceAsset[] | ((current: SourceAsset[]) => SourceAsset[])) => void;
   onUploadFile: (file: File) => Promise<string>;
   onCheckUrl: (url: string) => Promise<{ fetchable: boolean; reason?: string }>;
 };
@@ -36,18 +39,19 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [urlChecks, setUrlChecks] = useState<Record<string, UrlCheckState>>({});
 
+  // Changes apply to the latest list — see ReferenceAssetsEditor.updateAsset.
   const updateAsset = (id: string, patch: Partial<SourceAsset>) => {
-    onChange(
-      assets.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
+    onChange((current) =>
+      current.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
     );
   };
 
   const removeAsset = (id: string) => {
-    onChange(assets.filter((asset) => asset.id !== id));
+    onChange((current) => current.filter((asset) => asset.id !== id));
   };
 
   const addAsset = (type: SourceAssetType) => {
-    onChange([...assets, createSourceAsset({ type })]);
+    onChange((current) => [...current, createSourceAsset({ type })]);
   };
 
   const onSelectFile = async (asset: SourceAsset, file: File | undefined): Promise<void> => {
@@ -55,7 +59,13 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
     setUploadingId(asset.id);
     try {
       const url = await onUploadFile(file);
-      updateAsset(asset.id, { url, label: asset.label.trim() ? asset.label : file.name });
+      onChange((current) =>
+        current.map((a) =>
+          a.id === asset.id ? { ...a, url, label: a.label.trim() ? a.label : file.name } : a,
+        ),
+      );
+    } catch {
+      // onUploadFile has already shown the reason to the user.
     } finally {
       setUploadingId(null);
     }
@@ -138,7 +148,7 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                         Replace
                         <input
                           type="file"
-                          accept="video/*,image/*"
+                          accept={MEDIA_ACCEPT}
                           className="hidden"
                           disabled={isUploading}
                           onChange={(e) => void onSelectFile(asset, e.target.files?.[0])}
@@ -154,10 +164,10 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                       ) : (
                         <Upload className="h-4 w-4" />
                       )}
-                      {isUploading ? "Uploading…" : "Choose a video or image file"}
+                      {isUploading ? "Uploading…" : "Choose a video or image file (max 3 GB)"}
                       <input
                         type="file"
-                        accept="video/*,image/*"
+                        accept={MEDIA_ACCEPT}
                         className="hidden"
                         disabled={isUploading}
                         onChange={(e) => void onSelectFile(asset, e.target.files?.[0])}
@@ -170,6 +180,8 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                   <Label className="text-xs text-muted">URL</Label>
                   <div className="flex gap-2">
                     <Input
+                      name="campaign-source-link"
+                      autoComplete="off"
                       value={asset.url}
                       placeholder={
                         asset.type === "youtube"
@@ -181,10 +193,14 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                         setUrlChecks((prev) => ({ ...prev, [asset.id]: { status: "idle" } }));
                       }}
                       onBlur={() => {
-                        if (asset.type === "drive") void runUrlCheck(asset);
+                        // No point asking the server to fetch a link that's
+                        // the wrong kind — the field error below says why.
+                        if (asset.type === "drive" && !sourceLinkProblem(asset.type, asset.url)) {
+                          void runUrlCheck(asset);
+                        }
                       }}
                     />
-                    {asset.type === "drive" && asset.url.trim() ? (
+                    {asset.type === "drive" && asset.url.trim() && !sourceLinkProblem(asset.type, asset.url) ? (
                       <Button
                         type="button"
                         size="sm"
@@ -201,6 +217,12 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                       </Button>
                     ) : null}
                   </div>
+                  {sourceLinkProblem(asset.type, asset.url) ? (
+                    <p className="flex items-start gap-1.5 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      {sourceLinkProblem(asset.type, asset.url)}
+                    </p>
+                  ) : null}
                   {asset.type === "drive" && urlChecks[asset.id]?.status === "ok" ? (
                     <p className="flex items-center gap-1.5 text-xs text-green-400">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
@@ -218,6 +240,8 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
               <div className="space-y-1">
                 <Label className="text-xs text-muted">Label (optional)</Label>
                 <Input
+                  name="campaign-source-caption"
+                  autoComplete="off"
                   value={asset.label}
                   onChange={(e) => updateAsset(asset.id, { label: e.target.value })}
                 />

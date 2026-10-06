@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -29,6 +28,8 @@ import { normalizeUploadUrl, resolveMediaUrl } from "@/lib/media-url";
 import { adminApi, ApiError, brandApi } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import { latestStartDate, startDateProblem, todayInIndia } from "@/features/campaigns/lib/start-date";
+import { checkCoverFile, COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 
 const CATEGORY_OPTIONS = [
   "Fashion",
@@ -45,7 +46,6 @@ const CATEGORY_OPTIONS = [
   "Other",
 ];
 
-const MAX_COVER_BYTES = 50 * 1024 * 1024;
 
 function ValidCheck() {
   return (
@@ -56,8 +56,7 @@ function ValidCheck() {
 }
 
 export function CampaignNewBasicsPage() {
-  const navigate = useNavigate();
-  const { draft, paths, update, saveNow, loading } = useCampaignWizard();
+  const { draft, update, goToStep, loading } = useCampaignWizard();
   const { goBack, backLabel } = useWizardBack();
   const { getToken } = useAuth();
   const { toast } = useToast();
@@ -94,12 +93,9 @@ export function CampaignNewBasicsPage() {
 
   const onCoverSelected = async (file: File | undefined) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast("Cover must be an image (PNG, JPG, or WEBP).", "error");
-      return;
-    }
-    if (file.size > MAX_COVER_BYTES) {
-      toast("Cover image must be 50MB or smaller.", "error");
+    const problem = checkCoverFile(file);
+    if (problem) {
+      toast(problem, "error");
       return;
     }
     const token = getToken();
@@ -122,6 +118,8 @@ export function CampaignNewBasicsPage() {
     }
   };
 
+  const isDraftCampaign = draft.status === "draft";
+  const startDateError = isDraftCampaign ? startDateProblem(draft.startDate) : null;
   const hasPlatform = draft.platforms.length > 0;
   const hasValidLocation =
     draft.locationType === "pan_india" || draft.targetStates.length > 0;
@@ -188,7 +186,7 @@ export function CampaignNewBasicsPage() {
                 <input
                   ref={coverInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept={COVER_ACCEPT}
                   className="hidden"
                   onChange={(e) => void onCoverSelected(e.target.files?.[0])}
                 />
@@ -254,6 +252,8 @@ export function CampaignNewBasicsPage() {
                 </label>
                 <div className="relative">
                   <Input
+                    name="campaign-title"
+                    autoComplete="off"
                     id="title"
                     value={draft.title}
                     onChange={(e) => update({ title: e.target.value })}
@@ -262,6 +262,13 @@ export function CampaignNewBasicsPage() {
                   />
                   {draft.title.trim() && <ValidCheck />}
                 </div>
+                {!draft.title.trim() && (
+                  <p className="text-xs text-muted" role="status">
+                    {draft.campaignId
+                      ? "Campaign name is required — your other changes still save, and the campaign keeps its last name until you type a new one."
+                      : "Give your campaign a name to start saving your progress."}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -303,6 +310,8 @@ export function CampaignNewBasicsPage() {
                 </div>
                 {customCategoryOpen && (
                   <Input
+                    name="campaign-custom-category"
+                    autoComplete="off"
                     value={draft.category}
                     onChange={(e) => update({ category: e.target.value })}
                     placeholder="Enter your category"
@@ -396,9 +405,19 @@ export function CampaignNewBasicsPage() {
                   id="startDate"
                   type="date"
                   value={draft.startDate}
+                  // A campaign that already went live keeps its real (past)
+                  // start date; only drafts are limited to today onwards.
+                  min={isDraftCampaign ? todayInIndia() : undefined}
+                  max={latestStartDate()}
                   onChange={(e) => update({ startDate: e.target.value })}
-                  className="max-w-[220px]"
+                  className={cn("max-w-[220px]", startDateError && "border-destructive/50")}
+                  aria-invalid={Boolean(startDateError)}
                 />
+                {startDateError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {startDateError}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -415,7 +434,9 @@ export function CampaignNewBasicsPage() {
                 id: "next",
                 label: "Next: Brief & Rules",
                 onClick: () => {
-                  void saveNow("brief").then(() => navigate(paths.brief));
+                  void goToStep("brief").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: {
@@ -425,6 +446,7 @@ export function CampaignNewBasicsPage() {
                     !draft.category ||
                     !draft.coverImageUrl ||
                     !draft.startDate ||
+                    Boolean(startDateError) ||
                     !hasPlatform ||
                     !hasValidLocation ||
                     (needsBrandAssignment && !draft.brandProfileId),

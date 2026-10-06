@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Image, Loader2, PlayCircle, Trash2, Upload, Video, X } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { IMAGE_ACCEPT, VIDEO_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { Button } from "@/components/ui/button";
 import {
   createReferenceAsset,
@@ -23,7 +24,8 @@ const typeOptions: {
 
 type ReferenceAssetsEditorProps = {
   assets: ReferenceAsset[];
-  onChange: (assets: ReferenceAsset[]) => void;
+  /** Pass a function to apply a change to the LATEST list (see updateAsset). */
+  onChange: (next: ReferenceAsset[] | ((current: ReferenceAsset[]) => ReferenceAsset[])) => void;
   onUploadFile: (file: File, type: "image" | "video") => Promise<string>;
 };
 
@@ -35,18 +37,21 @@ export function ReferenceAssetsEditor({
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [previewAsset, setPreviewAsset] = useState<ReferenceAsset | null>(null);
 
+  // Changes apply to the latest list, not the `assets` this render saw — an
+  // upload can finish long after it started, and building from that old
+  // snapshot would wipe out anything added or edited in the meantime.
   const updateAsset = (id: string, patch: Partial<ReferenceAsset>) => {
-    onChange(
-      assets.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
+    onChange((current) =>
+      current.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
     );
   };
 
   const removeAsset = (id: string) => {
-    onChange(assets.filter((asset) => asset.id !== id));
+    onChange((current) => current.filter((asset) => asset.id !== id));
   };
 
   const addAsset = (type: ReferenceAssetType) => {
-    onChange([...assets, createReferenceAsset({ type })]);
+    onChange((current) => [...current, createReferenceAsset({ type })]);
   };
 
   const onSelectFile = async (
@@ -57,10 +62,15 @@ export function ReferenceAssetsEditor({
     setUploadingId(asset.id);
     try {
       const uploadedUrl = await onUploadFile(file, asset.type);
-      updateAsset(asset.id, {
-        url: uploadedUrl,
-        label: asset.label.trim() ? asset.label : file.name,
-      });
+      onChange((current) =>
+        current.map((a) =>
+          a.id === asset.id
+            ? { ...a, url: uploadedUrl, label: a.label.trim() ? a.label : file.name }
+            : a,
+        ),
+      );
+    } catch {
+      // onUploadFile has already shown the reason to the user.
     } finally {
       setUploadingId(null);
     }
@@ -142,7 +152,7 @@ export function ReferenceAssetsEditor({
                       </span>
                       <input
                         type="file"
-                        accept={asset.type === "image" ? "image/*" : "video/*"}
+                        accept={asset.type === "image" ? IMAGE_ACCEPT : VIDEO_ACCEPT}
                         className="hidden"
                         disabled={isUploading}
                         onChange={(e) =>
@@ -160,7 +170,7 @@ export function ReferenceAssetsEditor({
                       <Upload className="h-3.5 w-3.5" />
                       <input
                         type="file"
-                        accept={asset.type === "image" ? "image/*" : "video/*"}
+                        accept={asset.type === "image" ? IMAGE_ACCEPT : VIDEO_ACCEPT}
                         className="hidden"
                         disabled={isUploading}
                         onChange={(e) =>
@@ -185,6 +195,8 @@ export function ReferenceAssetsEditor({
                     {option?.label ?? asset.type}
                   </span>
                   <Input
+                    name="campaign-sample-caption"
+                    autoComplete="off"
                     value={asset.label}
                     placeholder="Label (optional)"
                     className="h-7 text-xs"

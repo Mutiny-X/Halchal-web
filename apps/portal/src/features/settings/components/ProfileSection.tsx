@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,7 @@ function AvatarUpload({ avatarUrl, name }: { avatarUrl: string | null | undefine
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={COVER_ACCEPT}
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];

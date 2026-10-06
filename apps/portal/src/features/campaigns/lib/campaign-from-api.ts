@@ -41,9 +41,11 @@ export function campaignToDraft(campaign: Campaign): CampaignDraft {
   return {
     campaignId: campaign.id,
     status: campaign.status as CampaignDraft["status"],
+    reviewRejectionReason: campaign.reviewRejectionReason ?? null,
     ownership: campaign.ownership,
     wizardStep: campaign.wizardStep,
     brandProfileId: campaign.brandProfileId,
+    brandCompanyName: campaign.brandCompanyName ?? null,
     inviteAcceptedAt: campaign.inviteAcceptedAt,
     title: campaign.title,
     category: campaign.category ?? "",
