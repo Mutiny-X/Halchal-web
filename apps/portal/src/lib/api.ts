@@ -464,6 +464,11 @@ export type Campaign = {
   poolRemainingPercent: number;
   newClipperIntakeStatus: "open" | "closed_at_threshold" | "manually_extended";
   startDate: string | null;
+  /** Set while the campaign waits for admin approval. */
+  submittedForReviewAt?: string | null;
+  /** Why an admin sent it back (cleared when it's submitted again). */
+  reviewRejectionReason?: string | null;
+  reviewedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   submissionCount?: number;
@@ -478,7 +483,7 @@ export type PaginatedCampaigns = {
   limit: number;
 };
 
-export type CampaignStatusFilter = "all" | "draft" | "live" | "paused" | "closed";
+export type CampaignStatusFilter = "all" | "draft" | "pending_review" | "live" | "paused" | "closed";
 
 export type SubmissionListItem = {
   id: string;
@@ -1512,6 +1517,19 @@ export const adminApi = {
     }),
 
   // Pool / intake overrides
+  approveCampaign: (token: string, campaignId: string) =>
+    apiFetch<Campaign>(`/admin/campaigns/${campaignId}/approve`, {
+      method: "POST",
+      accessToken: token,
+    }),
+
+  rejectCampaign: (token: string, campaignId: string, reason: string) =>
+    apiFetch<Campaign>(`/admin/campaigns/${campaignId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      accessToken: token,
+    }),
+
   setClipperIntake: (token: string, campaignId: string, extraClipperAllowance: number) =>
     apiFetch<{
       id: string;

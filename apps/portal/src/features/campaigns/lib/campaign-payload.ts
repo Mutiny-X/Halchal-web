@@ -121,7 +121,7 @@ export function isCampaignReadyToPublish(campaign: Campaign): boolean {
 
 export function buildCampaignBody(
   draft: CampaignDraft,
-  status: "draft" | "live" | "paused" | "closed",
+  status: CampaignDraft["status"],
   brandProfileId?: string | null,
 ): Record<string, unknown> {
   const referenceAssets = toApiReferenceAssets(draft.referenceAssets);

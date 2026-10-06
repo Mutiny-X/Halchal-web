@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/toaster";
 import { formatPlatformList } from "@/features/campaigns/lib/platform-labels";
 import { adminApi, ApiError, portalApi, type AdminBrandDetail, type Campaign } from "@/lib/api";
 import { useAuth } from "@/providers/auth-provider";
+import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
 
 /* ── helpers ── */
 function initials(name: string) {
@@ -28,6 +29,7 @@ function formatBudget(paise: number) {
 const STATUS_STYLE: Record<string, string> = {
   live:   "bg-emerald-500 text-white",
   draft:  "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-500 text-white",
 };
@@ -65,7 +67,7 @@ function CampaignCard({ c, onClick }: { c: Campaign & { submissionCount?: number
           </div>
           {/* Status */}
           <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>
-            {c.status}
+            {campaignStatusLabel(c.status)}
           </span>
         </div>
 

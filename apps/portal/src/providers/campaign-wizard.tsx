@@ -19,13 +19,16 @@ import {
   getWizardPaths,
   type WizardPaths,
 } from "@/features/campaigns/lib/wizard-paths";
-import { ApiError, portalApi } from "@/lib/api";
+import { isLockedForReview } from "@/features/campaigns/lib/campaign-status";
+import { ApiError, adminApi, portalApi } from "@/lib/api";
 import { joinCampaignRoom, leaveCampaignRoom } from "@/lib/socket";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 
 export type CampaignDraft = {
   campaignId: string | null;
-  status: "draft" | "live" | "paused" | "closed";
+  status: "draft" | "pending_review" | "live" | "paused" | "closed";
+  /** Why an admin sent the campaign back, until it's submitted again. */
+  reviewRejectionReason?: string | null;
   ownership?: "brand_created" | "admin_created";
   /** Furthest step this campaign has genuinely reached — server-enforced,
    * never regresses. Drives which steps the stepper allows jumping to. */
@@ -120,8 +123,13 @@ type WizardContext = {
   saveNow: (wizardStep?: WizardStepName) => Promise<string | null>;
   /** Saves (drafts only), then moves to `step` of this campaign. */
   goToStep: (step: WizardStepName) => Promise<{ ok: true } | { ok: false; error: string }>;
-  /** Saves everything and sets the campaign live, after any queued saves. */
-  publish: () => Promise<{ id: string }>;
+  /** Saves everything, then: an admin puts the campaign live (approving it
+   * if it was waiting); anyone else submits it for admin approval. */
+  publish: () => Promise<{ id: string; status: CampaignDraft["status"] }>;
+  /** Waiting for approval and this user isn't an admin: read-only. */
+  locked: boolean;
+  /** Takes a waiting campaign back to draft so it can be edited again. */
+  withdraw: () => Promise<void>;
   /** Opens the confirm-then-save dialog for a non-draft campaign. */
   requestSaveLiveChanges: () => void;
   retrySave: () => void;
@@ -240,7 +248,8 @@ export function CampaignWizardProvider({
       const payload: Record<string, unknown> = {
         ...body,
         wizardStep: opts.wizardStep ?? currentStepRef.current,
-        ...(opts.publish ? { status: "live" } : {}),
+        // Only an admin can put a campaign live; brands and staff submit it.
+        ...(opts.publish ? { status: isAdminRef.current ? "live" : "pending_review" } : {}),
       };
 
       if (id) {
@@ -249,6 +258,7 @@ export function CampaignWizardProvider({
         patchDraft({
           wizardStep: updated.wizardStep,
           status: updated.status as CampaignDraft["status"],
+          reviewRejectionReason: updated.reviewRejectionReason ?? null,
         });
         return id;
       }
@@ -295,6 +305,8 @@ export function CampaignWizardProvider({
 
   const update = useCallback(
     (patchOrFn: DraftPatch) => {
+      // Waiting for approval: what the admin reviews can't change underneath them.
+      if (isLockedForReview(draftRef.current.status, isAdminRef.current)) return;
       // A function receives the LATEST draft — needed by anything that
       // finishes later (an upload) and must not overwrite edits made since.
       patchDraft(typeof patchOrFn === "function" ? patchOrFn(draftRef.current) : patchOrFn);
@@ -405,13 +417,40 @@ export function CampaignWizardProvider({
     [navigate, saveNow],
   );
 
-  const publish = useCallback(async (): Promise<{ id: string }> => {
+  const publish = useCallback(async (): Promise<{ id: string; status: CampaignDraft["status"] }> => {
     clearSaveTimer();
+    // An admin approving a waiting campaign: save any edits first, then
+    // approve through the approval endpoint (it's recorded as an approval).
+    if (isAdminRef.current && draftRef.current.status === "pending_review") {
+      const id = await queue.run(async () => {
+        const savedId = await runSave({ wizardStep: "review" });
+        const token = getTokenRef.current();
+        if (!savedId || !token) throw new Error("Your session expired. Please log in again.");
+        const approved = await adminApi.approveCampaign(token, savedId);
+        patchDraft({ status: approved.status as CampaignDraft["status"] });
+        return savedId;
+      });
+      setDirty(false);
+      return { id: id!, status: draftRef.current.status };
+    }
     const id = await queue.run(() => runSave({ publish: true, wizardStep: "review" }));
     if (!id) throw new Error("Add a campaign name before publishing.");
     setDirty(false);
-    return { id };
-  }, [clearSaveTimer, queue, runSave]);
+    return { id, status: draftRef.current.status };
+  }, [clearSaveTimer, patchDraft, queue, runSave]);
+
+  const withdraw = useCallback(async () => {
+    const id = campaignIdRef.current;
+    if (!id) return;
+    await queue.run(async () => {
+      const token = getTokenRef.current();
+      if (!token) throw new Error("Your session expired. Please log in again.");
+      const updated = await portalApi.campaigns.update(token, id, { status: "draft" });
+      patchDraft({ status: updated.status as CampaignDraft["status"] });
+      return id;
+    });
+    setDirty(false);
+  }, [patchDraft, queue]);
 
   const confirmSaveLiveChanges = useCallback(async () => {
     setSavingLive(true);
@@ -460,6 +499,7 @@ export function CampaignWizardProvider({
   }, [hasUnsavedWork, saveState]);
 
   const autoSave = draft.status === "draft";
+  const locked = isLockedForReview(draft.status, isAdmin);
   const value = useMemo(
     () => ({
       draft,
@@ -475,11 +515,13 @@ export function CampaignWizardProvider({
       saveNow,
       goToStep,
       publish,
+      locked,
+      withdraw,
       requestSaveLiveChanges: () => setConfirmLiveSave(true),
       retrySave,
       reset,
     }),
-    [draft, paths, loading, saveState, saveError, loadError, autoSave, dirty, update, saveNow, goToStep, publish, retrySave, reset],
+    [draft, paths, loading, saveState, saveError, loadError, autoSave, dirty, update, saveNow, goToStep, publish, locked, withdraw, retrySave, reset],
   );
 
   return (
@@ -487,11 +529,17 @@ export function CampaignWizardProvider({
       {children}
       <ConfirmDialog
         open={confirmLiveSave}
-        title={`Save changes to this ${draft.status} campaign?`}
+        title={
+          draft.status === "pending_review"
+            ? "Save changes to this campaign before approving?"
+            : `Save changes to this ${draft.status} campaign?`
+        }
         description={
           saveError && !savingLive
             ? `Couldn't save: ${saveError}`
-            : "Creators see these changes as soon as you save."
+            : draft.status === "pending_review"
+              ? "It isn't live yet. Creators only see it once it's approved."
+              : "Creators see these changes as soon as you save."
         }
         confirmLabel="Save changes"
         loading={savingLive}

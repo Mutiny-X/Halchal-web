@@ -9,12 +9,16 @@ import {
   MapPin,
   PlayCircle,
   Rocket,
+  Send,
+  ShieldCheck,
+  Undo2,
   Upload,
   UserPlus,
   Youtube,
 } from "lucide-react";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import { RejectCampaignDialog } from "@/features/campaigns/components/reject-campaign-dialog";
 import { useToast } from "@/components/ui/toaster";
 import {
   CampaignWizardFooter,
@@ -150,7 +154,10 @@ export function CampaignReviewPage() {
   const { goBack, backLabel } = useWizardBack();
   const role = usePortalRole();
   const isAdmin = role === "admin";
-  const { draft, paths, autoSave, dirty, requestSaveLiveChanges } = useCampaignWizard();
+  const { draft, paths, autoSave, dirty, locked, requestSaveLiveChanges } = useCampaignWizard();
+  // Admins publish (or approve) directly; brands and staff submit for approval.
+  const reviewingSubmission = isAdmin && draft.status === "pending_review";
+  const [rejectOpen, setRejectOpen] = useState(false);
   const { toast } = useToast();
   const { publishWithFeedback, saving } = useCampaignDraftSave();
   const [previewAsset, setPreviewAsset] = useState<ReferenceAsset | null>(null);
@@ -208,7 +215,13 @@ export function CampaignReviewPage() {
         <div className="pb-24">
           <CampaignWizardHeader
             title="Review your Campaign"
-            subtitle="Check all campaign details before publishing to creators."
+            subtitle={
+              reviewingSubmission
+                ? "Check everything, then approve it to go live, or send it back to the brand with a reason."
+                : isAdmin
+                  ? "Check all campaign details before publishing to creators."
+                  : "Check all campaign details, then submit it. An admin approves it before creators can see it."
+            }
             onBack={goBack}
           />
 
@@ -229,7 +242,13 @@ export function CampaignReviewPage() {
                   <AlertTriangle className="h-4 w-4 text-warning" />
                 )}
                 <p className="text-sm font-semibold text-foreground">
-                  {readyToPublish ? "Ready to publish" : "Before you publish"}
+                  {readyToPublish
+                    ? isAdmin
+                      ? "Ready to publish"
+                      : "Ready to submit for approval"
+                    : isAdmin
+                      ? "Before you publish"
+                      : "Before you submit"}
                 </p>
               </div>
               <div className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
@@ -518,13 +537,43 @@ export function CampaignReviewPage() {
               onClick: goBack,
               buttonProps: { size: "sm", variant: "outline" },
             }}
-            rightActions={[
+            rightActions={locked ? [] : reviewingSubmission ? [
+              {
+                id: "reject",
+                label: "Send back",
+                onClick: () => setRejectOpen(true),
+                icon: <Undo2 className="h-4 w-4" />,
+                buttonProps: { size: "sm", variant: "outline", disabled: saving },
+              },
+              ...(dirty
+                ? [{
+                    id: "save-live",
+                    label: "Save changes",
+                    onClick: requestSaveLiveChanges,
+                    buttonProps: { size: "sm" as const, variant: "outline" as const, disabled: !budgetValid },
+                  }]
+                : []),
+              {
+                id: "approve",
+                label: saving ? "Approving..." : "Approve & go live",
+                onClick: () => void onPublish(),
+                icon: !saving ? <ShieldCheck className="h-4 w-4" /> : undefined,
+                buttonProps: {
+                  size: "sm",
+                  variant: "success",
+                  // Edits must be saved (or discarded) before approving.
+                  disabled: saving || !readyToPublish || dirty,
+                },
+              },
+            ] : [
               autoSave
                 ? {
                     id: "publish",
-                    label: saving ? "Publishing..." : "Publish Campaign",
+                    label: isAdmin
+                      ? saving ? "Publishing..." : "Publish Campaign"
+                      : saving ? "Submitting..." : "Submit for approval",
                     onClick: () => void onPublish(),
-                    icon: !saving ? <Rocket className="h-4 w-4" /> : undefined,
+                    icon: !saving ? (isAdmin ? <Rocket className="h-4 w-4" /> : <Send className="h-4 w-4" />) : undefined,
                     buttonProps: {
                       size: "sm",
                       variant: "success",
@@ -547,6 +596,19 @@ export function CampaignReviewPage() {
           />
         </div>
       </WizardPage>
+      {draft.campaignId && (
+        <RejectCampaignDialog
+          open={rejectOpen}
+          campaignId={draft.campaignId}
+          campaignTitle={draft.title}
+          onCancel={() => setRejectOpen(false)}
+          onRejected={() => {
+            setRejectOpen(false);
+            toast("Sent back to the brand with your reason.", "success");
+            navigate("/admin/campaigns?status=pending_review");
+          }}
+        />
+      )}
     </>
   );
 }

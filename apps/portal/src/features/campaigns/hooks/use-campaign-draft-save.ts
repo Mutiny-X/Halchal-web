@@ -21,7 +21,7 @@ export function useCampaignDraftSave() {
 
   const campaignsBase = isAdmin ? "/admin/campaigns" : "/campaigns";
 
-  const publish = useCallback(async (): Promise<{ id: string }> => {
+  const publish = useCallback(async (): Promise<{ id: string; status: string }> => {
     if (hasInvalidReferenceAssets(draft.referenceAssets)) {
       throw new Error(
         "Upload files for all image/video sample content before publishing.",
@@ -43,7 +43,12 @@ export function useCampaignDraftSave() {
     ): Promise<string | null> => {
       try {
         const result = await publish();
-        toast("Campaign published. Creators can now discover it.", "success");
+        toast(
+          result.status === "pending_review"
+            ? "Submitted for approval. It goes live as soon as an admin approves it, and we'll notify you."
+            : "Campaign published. Creators can now discover it.",
+          "success",
+        );
         reset();
         navigate(campaignsBase);
         return result.id;
