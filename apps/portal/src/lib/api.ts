@@ -739,6 +739,83 @@ export type AdminCreatorInstagramConnection = {
   lastSyncedAt: string;
 };
 
+export type InsightKeyValue = { key: string; value: number };
+export type InsightDemographics = {
+  age: InsightKeyValue[] | null;
+  gender: InsightKeyValue[] | null;
+  country: InsightKeyValue[] | null;
+  city: InsightKeyValue[] | null;
+};
+export type InsightContentKind = "reel" | "carousel" | "photo" | "video" | "story";
+export type InsightPostMetrics = {
+  views?: number;
+  reach?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+  totalInteractions?: number;
+  avgWatchTimeMs?: number;
+  totalWatchTimeMs?: number;
+  profileVisits?: number;
+  follows?: number;
+};
+/** Everything Instagram's Insights API reports for a connected account. */
+export type InstagramAccountInsights = {
+  connectionId: string;
+  syncedAt: string;
+  period: { since: string; until: string; days: number };
+  profile: {
+    username: string;
+    name: string | null;
+    biography: string | null;
+    website: string | null;
+    profilePictureUrl: string | null;
+    accountType: string | null;
+    followerCount: number;
+    followsCount: number;
+    mediaCount: number;
+  };
+  overview: {
+    totals: {
+      views: number | null;
+      reach: number | null;
+      accountsEngaged: number | null;
+      totalInteractions: number | null;
+      likes: number | null;
+      comments: number | null;
+      shares: number | null;
+      saves: number | null;
+      replies: number | null;
+      profileLinksTaps: number | null;
+      follows: number | null;
+      unfollows: number | null;
+    };
+    viewsByFormat: InsightKeyValue[] | null;
+    reachByFormat: InsightKeyValue[] | null;
+    reachByFollowType: InsightKeyValue[] | null;
+    profileLinkTaps: InsightKeyValue[] | null;
+    followerGrowth: { points: Array<{ date: string; value: number }>; net: number } | null;
+  };
+  audience: { followers: InsightDemographics; engaged: InsightDemographics };
+  content: {
+    mix: Array<{ kind: InsightContentKind; count: number }>;
+    analysedPosts: number;
+    posts: Array<{
+      id: string;
+      kind: InsightContentKind;
+      permalink: string | null;
+      caption: string | null;
+      thumbnailUrl: string | null;
+      timestamp: string | null;
+      childCount: number | null;
+      metrics: InsightPostMetrics;
+      engagementByReach: number | null;
+    }>;
+  };
+  unavailable: Array<{ section: string; reason: "permission" | "threshold" | "not_supported" | "error"; message: string }>;
+};
+
 export type AdminCreatorDetail = {
   id: string;
   displayName: string | null;
@@ -1517,6 +1594,12 @@ export const adminApi = {
     }),
 
   // Pool / intake overrides
+  creatorInstagramInsights: (token: string, creatorId: string, connectionId: string, refresh = false) =>
+    apiFetch<{ report: InstagramAccountInsights; cached: boolean; connected: boolean }>(
+      `/admin/creators/${creatorId}/instagram-insights/${connectionId}${refresh ? "?refresh=1" : ""}`,
+      { accessToken: token },
+    ),
+
   approveCampaign: (token: string, campaignId: string) =>
     apiFetch<Campaign>(`/admin/campaigns/${campaignId}/approve`, {
       method: "POST",

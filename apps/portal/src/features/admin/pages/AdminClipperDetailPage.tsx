@@ -39,6 +39,7 @@ import { resolveMediaUrl } from "@/lib/media-url";
 import { connectedSocialUrl } from "@/lib/social-profile-url";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/providers/auth-provider";
+import { InstagramInsightsPanel } from "@/features/admin/components/instagram-insights-panel";
 
 function initials(name: string) {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "C";
@@ -433,7 +434,7 @@ function PayoutMethodRow({ method }: { method: AdminCreatorPayoutMethod }) {
 export function AdminClipperDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { getToken } = useAuth();
-  const [tab, setTab] = useState<"campaigns" | "wallet" | "about">("campaigns");
+  const [tab, setTab] = useState<"campaigns" | "instagram" | "wallet" | "about">("campaigns");
 
   const { data: creator, isPending } = useQuery({
     queryKey: ["admin-creator", id],
@@ -512,7 +513,7 @@ export function AdminClipperDetailPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-border">
-        {(["campaigns", "wallet", "about"] as const).map((t) => (
+        {(["campaigns", "instagram", "wallet", "about"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -520,7 +521,7 @@ export function AdminClipperDetailPage() {
               tab === t ? "text-foreground" : "text-muted hover:text-foreground"
             }`}
           >
-            {t === "wallet" ? "Wallet & Payouts" : t}
+            {t === "wallet" ? "Wallet & Payouts" : t === "instagram" ? "Instagram insights" : t}
             {tab === t && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
           </button>
         ))}
@@ -538,6 +539,11 @@ export function AdminClipperDetailPage() {
             <CampaignCardGrid entries={creator.pastCampaigns} emptyMessage="No past campaigns." />
           </div>
         </div>
+      )}
+
+      {/* Instagram insights tab */}
+      {tab === "instagram" && (
+        <InstagramInsightsPanel creatorId={creator.id} connections={creator.instagramConnections} />
       )}
 
       {/* Wallet & Payouts tab */}
