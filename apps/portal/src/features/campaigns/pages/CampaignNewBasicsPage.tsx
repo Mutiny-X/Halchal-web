@@ -28,6 +28,7 @@ import { normalizeUploadUrl, resolveMediaUrl } from "@/lib/media-url";
 import { adminApi, ApiError, brandApi } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import { latestStartDate, startDateProblem, todayInIndia } from "@/features/campaigns/lib/start-date";
 import { checkCoverFile, COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 
 const CATEGORY_OPTIONS = [
@@ -117,6 +118,8 @@ export function CampaignNewBasicsPage() {
     }
   };
 
+  const isDraftCampaign = draft.status === "draft";
+  const startDateError = isDraftCampaign ? startDateProblem(draft.startDate) : null;
   const hasPlatform = draft.platforms.length > 0;
   const hasValidLocation =
     draft.locationType === "pan_india" || draft.targetStates.length > 0;
@@ -398,9 +401,19 @@ export function CampaignNewBasicsPage() {
                   id="startDate"
                   type="date"
                   value={draft.startDate}
+                  // A campaign that already went live keeps its real (past)
+                  // start date; only drafts are limited to today onwards.
+                  min={isDraftCampaign ? todayInIndia() : undefined}
+                  max={latestStartDate()}
                   onChange={(e) => update({ startDate: e.target.value })}
-                  className="max-w-[220px]"
+                  className={cn("max-w-[220px]", startDateError && "border-destructive/50")}
+                  aria-invalid={Boolean(startDateError)}
                 />
+                {startDateError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {startDateError}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -429,6 +442,7 @@ export function CampaignNewBasicsPage() {
                     !draft.category ||
                     !draft.coverImageUrl ||
                     !draft.startDate ||
+                    Boolean(startDateError) ||
                     !hasPlatform ||
                     !hasValidLocation ||
                     (needsBrandAssignment && !draft.brandProfileId),

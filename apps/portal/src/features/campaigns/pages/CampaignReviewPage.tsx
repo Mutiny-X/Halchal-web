@@ -29,6 +29,7 @@ import {
   validateMoneyFields,
 } from "@/features/campaigns/lib/campaign-payload";
 import type { ReferenceAsset } from "@/features/campaigns/lib/reference-assets";
+import { startDateProblem } from "@/features/campaigns/lib/start-date";
 import {
   estimateMinClippersNeeded,
   estimateViewsFromBudget,
@@ -106,6 +107,11 @@ export function CampaignReviewPage() {
 
   const checklist = [
     { label: "Campaign name", ok: draft.title.trim().length > 0, path: paths.basics },
+    {
+      label: "Start date (today or later)",
+      ok: Boolean(draft.startDate) && (draft.status !== "draft" || !startDateProblem(draft.startDate)),
+      path: paths.basics,
+    },
     { label: "Target platform selected", ok: draft.platforms.length > 0, path: paths.basics },
     {
       label: "Target location set",

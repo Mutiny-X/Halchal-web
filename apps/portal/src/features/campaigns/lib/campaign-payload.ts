@@ -4,6 +4,7 @@ import {
   type ReferenceAsset,
 } from "@/features/campaigns/lib/reference-assets";
 import { parseRulePoints } from "@/features/campaigns/lib/rule-points";
+import { startDateProblem } from "@/features/campaigns/lib/start-date";
 import { toApiSourceAssets } from "@/features/campaigns/lib/source-assets";
 import type { Campaign } from "@/lib/api";
 import type { CampaignDraft } from "@/providers/campaign-wizard";
@@ -100,6 +101,9 @@ export function isCampaignReadyToPublish(campaign: Campaign): boolean {
   const hasDoPoints = parseRulePoints(campaign.doRules ?? "").length > 0;
   const hasAvoidPoints = parseRulePoints(campaign.avoidRules ?? "").length > 0;
   const hasSourceAsset = (campaign.sourceAssets ?? []).some((a) => a.url.trim().length > 0);
+  // The "Set live" button on the list is for drafts, which can't start in the past.
+  const startDay = campaign.startDate ? campaign.startDate.slice(0, 10) : "";
+  const hasValidStartDate = Boolean(startDay) && !startDateProblem(startDay);
 
   return (
     hasTitle &&
@@ -109,6 +113,7 @@ export function isCampaignReadyToPublish(campaign: Campaign): boolean {
     hasDoPoints &&
     hasAvoidPoints &&
     hasSourceAsset &&
+    hasValidStartDate &&
     hasValidAssets &&
     budgetValid
   );
@@ -134,7 +139,12 @@ export function buildCampaignBody(
     platforms,
     locationType: draft.locationType,
     targetStates: draft.locationType === "states" ? draft.targetStates : [],
-    startDate: draft.startDate || undefined,
+    // A draft's past/invalid start date isn't sent (the field shows why), so
+    // it can't make the server refuse the whole save and block other edits.
+    startDate:
+      draft.startDate && !(draft.status === "draft" && startDateProblem(draft.startDate))
+        ? draft.startDate
+        : undefined,
     briefHook: draft.briefHook || undefined,
     doRules: draft.doRules || undefined,
     avoidRules: draft.avoidRules || undefined,

@@ -69,6 +69,14 @@ describe("buildCampaignBody", () => {
     expect(JSON.parse(JSON.stringify(body))).not.toHaveProperty("budgetPaise");
   });
 
+  it("leaves a past start date out of a draft's save, so other edits still save", () => {
+    expect(buildCampaignBody({ ...baseDraft, startDate: "2020-01-01" }, "draft").startDate).toBeUndefined();
+    const future = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    expect(buildCampaignBody({ ...baseDraft, startDate: future }, "draft").startDate).toBe(future);
+    // A live campaign keeps sending its real (past) start date unchanged.
+    expect(buildCampaignBody({ ...baseDraft, status: "live", startDate: "2020-01-01" }, "live").startDate).toBe("2020-01-01");
+  });
+
   it("sends whole paise for valid amounts", () => {
     const body = buildCampaignBody(baseDraft, "draft");
     expect(body).toMatchObject({ ratePer1kPaise: 5000, maxPayoutPaise: 5_000_000, budgetPaise: 10_000_000 });
@@ -103,6 +111,7 @@ describe("isCampaignReadyToPublish (list 'Set live' button)", () => {
     ratePer1kPaise: 5000,
     maxPayoutPaise: 5_000_000,
     budgetPaise: 10_000_000,
+    startDate: `${new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`,
   } as unknown as Campaign;
 
   it("is true only when the server's publish rules would pass", () => {
@@ -111,5 +120,7 @@ describe("isCampaignReadyToPublish (list 'Set live' button)", () => {
     expect(isCampaignReadyToPublish({ ...ready, avoidRules: null })).toBe(false);
     expect(isCampaignReadyToPublish({ ...ready, sourceAssets: [] })).toBe(false);
     expect(isCampaignReadyToPublish({ ...ready, budgetPaise: 4_000_000 })).toBe(false);
+    expect(isCampaignReadyToPublish({ ...ready, startDate: null })).toBe(false);
+    expect(isCampaignReadyToPublish({ ...ready, startDate: "2020-01-01T00:00:00.000Z" })).toBe(false);
   });
 });
