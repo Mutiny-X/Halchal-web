@@ -1,4 +1,5 @@
 import type { Portal } from "./portal";
+import { fileContentType } from "@/features/campaigns/lib/upload-rules";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -269,7 +270,7 @@ async function uploadDirect<T extends object = object>(
       accessToken: token,
       body: JSON.stringify({
         purpose,
-        contentType: file.type,
+        contentType: fileContentType(file),
         size: file.size,
         fileName: file.name,
         deliverableId: opts.deliverableId,
@@ -286,7 +287,9 @@ async function uploadDirect<T extends object = object>(
   try {
     putRes = await fetch(presign.uploadUrl, { method: "PUT", body: file, headers: presign.headers });
   } catch {
-    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+    // The API answered the step before, so this is the browser → storage
+    // leg (connection dropped, or storage refusing this site).
+    throw new ApiError("NETWORK_ERROR", "Couldn't upload the file to storage. Check your connection and try again.");
   }
   if (!putRes.ok) {
     throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status}) — please try again.`, putRes.status);
@@ -303,8 +306,8 @@ const asResult = (r: { url: string; path?: string; name?: string; type?: "image"
   url: r.url,
   path: r.path ?? r.url,
   name: r.name ?? file.name,
-  type: r.type ?? (file.type.startsWith("video/") ? "video" : "image"),
-  contentType: file.type,
+  type: r.type ?? (fileContentType(file).startsWith("video/") ? "video" : "image"),
+  contentType: fileContentType(file),
 });
 
 function legacyForm<T>(path: string, token: string, file: File): Promise<T> {
@@ -1060,7 +1063,7 @@ const campaignsApi = {
       method: "DELETE",
       accessToken: token,
     }),
-  /** Sample content and source files, any size up to 5 GB — straight to R2. */
+  /** Sample content and source files, up to 4.9 GB (R2 single-upload ceiling) — straight to R2. */
   uploadReferenceAsset: (token: string, file: File) =>
     uploadDirect(token, file, "campaign-asset", {
       legacy: async () =>
