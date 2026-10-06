@@ -44,6 +44,7 @@ export function campaignToDraft(campaign: Campaign): CampaignDraft {
     ownership: campaign.ownership,
     wizardStep: campaign.wizardStep,
     brandProfileId: campaign.brandProfileId,
+    brandCompanyName: campaign.brandCompanyName ?? null,
     inviteAcceptedAt: campaign.inviteAcceptedAt,
     title: campaign.title,
     category: campaign.category ?? "",

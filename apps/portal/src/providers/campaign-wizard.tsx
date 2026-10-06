@@ -31,6 +31,8 @@ export type CampaignDraft = {
    * never regresses. Drives which steps the stepper allows jumping to. */
   wizardStep: "basics" | "brief" | "payout" | "review";
   brandProfileId: string | null;
+  /** For admin/staff review; filled when loading an existing campaign. */
+  brandCompanyName?: string | null;
   inviteAcceptedAt?: string | null;
   coverImageUrl: string;
   title: string;

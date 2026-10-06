@@ -17,9 +17,9 @@ import {
 } from "@/features/campaigns/lib/estimate-views";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { validateMoneyFields } from "@/features/campaigns/lib/campaign-payload";
+import { checkoutTotals, PLATFORM_FEE_RATE } from "@/features/campaigns/lib/pricing";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 
-const PLATFORM_FEE_RATE = 0.15;
 
 function formatRupees(value: number): string {
   if (!Number.isFinite(value)) return "₹0";
@@ -55,8 +55,7 @@ export function CampaignPayoutPage() {
   const budget = Number(draft.budgetRupees);
   const estimatedViews = estimateViewsFromBudget(budget, rate);
   const minClippersNeeded = estimateMinClippersNeeded(budget, maxPayout);
-  const platformFee = Number.isFinite(budget) ? budget * PLATFORM_FEE_RATE : 0;
-  const totalCheckout = Number.isFinite(budget) ? budget + platformFee : 0;
+  const { platformFee, total: totalCheckout } = checkoutTotals(budget);
 
   // Same rules the Review step and the API apply — an empty or invalid
   // amount is an error here, never silently replaced by a default.
@@ -139,7 +138,7 @@ export function CampaignPayoutPage() {
               <div className="rounded-xl border border-border bg-surface p-4">
                 <div className="space-y-1 divide-y divide-border/70">
                   <SummaryLine label="Budget pool" value={formatRupees(budget || 0)} />
-                  <SummaryLine label="Platform fee (15%)" value={formatRupees(platformFee)} />
+                  <SummaryLine label={`Platform fee (${PLATFORM_FEE_RATE * 100}%)`} value={formatRupees(platformFee)} />
                   <SummaryLine label="Total checkout" value={formatRupees(totalCheckout)} bold />
                 </div>
                 <p className="mt-3 text-xs text-muted">
