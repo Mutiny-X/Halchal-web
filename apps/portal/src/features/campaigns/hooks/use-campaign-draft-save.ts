@@ -1,12 +1,9 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  buildCampaignBody,
-  hasInvalidReferenceAssets,
-} from "@/features/campaigns/lib/campaign-payload";
-import { ApiError, portalApi } from "@/lib/api";
-import { useAuth, usePortalRole } from "@/providers/auth-provider";
+import { hasInvalidReferenceAssets } from "@/features/campaigns/lib/campaign-payload";
+import { ApiError } from "@/lib/api";
+import { usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 
 function apiErrorMessage(error: unknown, fallback: string): string {
@@ -17,11 +14,10 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 
 export function useCampaignDraftSave() {
   const navigate = useNavigate();
-  const { getToken } = useAuth();
   const role = usePortalRole();
   const isAdmin = role === "admin";
-  const { draft, reset } = useCampaignWizard();
-  const [saving, setSaving] = useState(false);
+  const { draft, reset, publish: publishFromWizard } = useCampaignWizard();
+  const [publishing, setPublishing] = useState(false);
 
   const campaignsBase = isAdmin ? "/admin/campaigns" : "/campaigns";
 
@@ -31,32 +27,15 @@ export function useCampaignDraftSave() {
         "Upload files for all image/video sample content before publishing.",
       );
     }
-
-    const token = getToken();
-    if (!token) {
-      throw new Error("Your session expired. Please log in again.");
-    }
-
-    setSaving(true);
+    setPublishing(true);
     try {
-      const body = buildCampaignBody(draft, "live");
-      if (draft.campaignId) {
-        const updated = await portalApi.campaigns.update(
-          token,
-          draft.campaignId,
-          { ...body, wizardStep: "review" },
-        );
-        return { id: updated.id };
-      }
-      const created = await portalApi.campaigns.create(token, {
-        ...body,
-        wizardStep: "review",
-      });
-      return { id: created.id };
+      // Goes through the wizard's save queue: any pending auto-save is
+      // folded in and runs first, so nothing can land after the publish.
+      return await publishFromWizard();
     } finally {
-      setSaving(false);
+      setPublishing(false);
     }
-  }, [draft, getToken, isAdmin]);
+  }, [draft.referenceAssets, publishFromWizard]);
 
   const publishWithFeedback = useCallback(
     async (
@@ -79,6 +58,6 @@ export function useCampaignDraftSave() {
   return {
     publish,
     publishWithFeedback,
-    saving,
+    saving: publishing,
   };
 }

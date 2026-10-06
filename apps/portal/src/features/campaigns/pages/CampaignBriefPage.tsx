@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowRight,
@@ -27,27 +26,11 @@ import { ApiError, brandApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import {
+  checkMediaFile,
+  usesDirectUpload,
+} from "@/features/campaigns/lib/upload-rules";
 import { useAuth } from "@/providers/auth-provider";
-
-// Files at or under this go through uploadReferenceAsset (buffered through
-// the API server, matching campaigns.controller.ts's reference-assets/upload
-// limit) — slower and capped lower, but the backend can actually validate
-// the video is playable before accepting it. Above this, uploadReferenceAssetDirect
-// sends the bytes straight to R2 instead (see api.ts) — no playability
-// check, but scales up to R2's own 5GB single-PUT ceiling instead of
-// being limited by how much the backend can safely buffer in memory.
-const BUFFERED_UPLOAD_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
-
-function formatBytes(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${mb.toFixed(0)}MB`;
-}
-
-function checkFileSize(file: File): string | null {
-  if (file.size <= MAX_UPLOAD_BYTES) return null;
-  return `File is ${formatBytes(file.size)} — max is ${formatBytes(MAX_UPLOAD_BYTES)}.`;
-}
 
 type SourceRequirement = "mandatory" | "optional" | "not_required";
 
@@ -102,9 +85,8 @@ function CardHeader({ icon: Icon, title }: { icon: typeof Lightbulb; title: stri
 }
 
 export function CampaignBriefPage() {
-  const navigate = useNavigate();
   const { goBack, backLabel } = useWizardBack();
-  const { draft, paths, update, saveNow } = useCampaignWizard();
+  const { draft, update, goToStep } = useCampaignWizard();
   const { getToken } = useAuth();
   const { toast } = useToast();
   const uploadReferenceAsset = async (
@@ -116,7 +98,7 @@ export function CampaignBriefPage() {
       throw new Error("Your session expired. Please log in again.");
     }
     const uploaded =
-      file.size > BUFFERED_UPLOAD_THRESHOLD_BYTES
+      usesDirectUpload(file)
         ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
         : await brandApi.campaigns.uploadReferenceAsset(token, file);
     if (uploaded.type !== expectedType) {
@@ -248,9 +230,13 @@ export function CampaignBriefPage() {
               <p className="mb-3 text-xs text-muted">Sample images (post) or videos (reel).</p>
               <ReferenceAssetsEditor
                 assets={draft.referenceAssets}
-                onChange={(referenceAssets) => update({ referenceAssets })}
+                onChange={(next) =>
+                  update((d) => ({
+                    referenceAssets: typeof next === "function" ? next(d.referenceAssets) : next,
+                  }))
+                }
                 onUploadFile={async (file, type) => {
-                  const oversizeMessage = checkFileSize(file);
+                  const oversizeMessage = checkMediaFile(file, type);
                   if (oversizeMessage) {
                     toast(oversizeMessage, "error");
                     throw new Error(oversizeMessage);
@@ -280,9 +266,13 @@ export function CampaignBriefPage() {
               <p className="mb-3 text-xs text-muted">Drive/YouTube links, or a file uploaded from this device, that creators can use.</p>
               <SourceAssetsEditor
                 assets={draft.sourceAssets}
-                onChange={(sourceAssets) => update({ sourceAssets })}
+                onChange={(next) =>
+                  update((d) => ({
+                    sourceAssets: typeof next === "function" ? next(d.sourceAssets) : next,
+                  }))
+                }
                 onUploadFile={async (file) => {
-                  const oversizeMessage = checkFileSize(file);
+                  const oversizeMessage = checkMediaFile(file);
                   if (oversizeMessage) {
                     toast(oversizeMessage, "error");
                     throw new Error(oversizeMessage);
@@ -290,7 +280,7 @@ export function CampaignBriefPage() {
                   try {
                     const token = getToken()!;
                     const uploaded =
-                      file.size > BUFFERED_UPLOAD_THRESHOLD_BYTES
+                      usesDirectUpload(file)
                         ? await brandApi.campaigns.uploadReferenceAssetDirect(token, file)
                         : await brandApi.campaigns.uploadReferenceAsset(token, file);
                     toast("File uploaded.", "success");
@@ -342,7 +332,9 @@ export function CampaignBriefPage() {
                 id: "next",
                 label: "Next: Budget",
                 onClick: () => {
-                  void saveNow("payout").then(() => navigate(paths.payout));
+                  void goToStep("payout").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: { size: "sm", disabled: !canContinue },

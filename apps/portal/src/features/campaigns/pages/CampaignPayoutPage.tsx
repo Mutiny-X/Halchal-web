@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Eye, TrendingUp, UserPlus } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
 import {
   CampaignWizardFooter,
@@ -16,6 +16,7 @@ import {
   formatEstimatedViews,
 } from "@/features/campaigns/lib/estimate-views";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
+import { validateMoneyFields } from "@/features/campaigns/lib/campaign-payload";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 
 const PLATFORM_FEE_RATE = 0.15;
@@ -44,9 +45,10 @@ function SummaryLine({ label, value, bold }: { label: string; value: string; bol
 }
 
 export function CampaignPayoutPage() {
-  const navigate = useNavigate();
   const { goBack, backLabel } = useWizardBack();
-  const { draft, paths, update, saveNow } = useCampaignWizard();
+  const { draft, update, goToStep } = useCampaignWizard();
+  const { toast } = useToast();
+  const errors = validateMoneyFields(draft);
 
   const rate = Number(draft.ratePer1kRupees);
   const maxPayout = Number(draft.maxPayoutRupees);
@@ -56,9 +58,11 @@ export function CampaignPayoutPage() {
   const platformFee = Number.isFinite(budget) ? budget * PLATFORM_FEE_RATE : 0;
   const totalCheckout = Number.isFinite(budget) ? budget + platformFee : 0;
 
-  const rateValid = Number.isFinite(rate) && rate > 0;
-  const maxPayoutValid = Number.isFinite(maxPayout) && maxPayout >= 1000;
-  const budgetValid = Number.isFinite(budget) && maxPayoutValid && budget >= maxPayout;
+  // Same rules the Review step and the API apply — an empty or invalid
+  // amount is an error here, never silently replaced by a default.
+  const rateValid = errors.rate === null;
+  const maxPayoutValid = errors.maxPayout === null;
+  const budgetValid = errors.budget === null;
 
   const canContinue = rateValid && maxPayoutValid && budgetValid;
 
@@ -90,7 +94,7 @@ export function CampaignPayoutPage() {
                     onChange={(e) => update({ ratePer1kRupees: e.target.value })}
                     className={!rateValid ? "border-destructive/50" : undefined}
                   />
-                  {!rateValid && <FieldError>Enter a rate greater than ₹0.</FieldError>}
+                  {errors.rate && <FieldError>{errors.rate}</FieldError>}
                 </div>
 
                 <div className="space-y-2">
@@ -106,7 +110,7 @@ export function CampaignPayoutPage() {
                     onChange={(e) => update({ maxPayoutRupees: e.target.value })}
                     className={!maxPayoutValid ? "border-destructive/50" : undefined}
                   />
-                  {!maxPayoutValid && <FieldError>Must be at least ₹1,000.</FieldError>}
+                  {errors.maxPayout && <FieldError>{errors.maxPayout}</FieldError>}
                 </div>
               </div>
 
@@ -123,11 +127,7 @@ export function CampaignPayoutPage() {
                   onChange={(e) => update({ budgetRupees: e.target.value })}
                   className={cn("max-w-[280px]", !budgetValid && "border-destructive/50")}
                 />
-                {!budgetValid && maxPayoutValid && (
-                  <FieldError>
-                    Budget must be at least the max payout per creator ({formatRupees(maxPayout)}).
-                  </FieldError>
-                )}
+                {errors.budget && <FieldError>{errors.budget}</FieldError>}
               </div>
 
               <div className="rounded-xl border border-border bg-surface p-4">
@@ -183,7 +183,9 @@ export function CampaignPayoutPage() {
                 id: "next",
                 label: "Next: Review",
                 onClick: () => {
-                  void saveNow("review").then(() => navigate(paths.review));
+                  void goToStep("review").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: { size: "sm", disabled: !canContinue },

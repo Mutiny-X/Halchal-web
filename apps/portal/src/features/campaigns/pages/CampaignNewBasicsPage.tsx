@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -29,6 +28,7 @@ import { normalizeUploadUrl, resolveMediaUrl } from "@/lib/media-url";
 import { adminApi, ApiError, brandApi } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import { checkCoverFile, COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 
 const CATEGORY_OPTIONS = [
   "Fashion",
@@ -45,7 +45,6 @@ const CATEGORY_OPTIONS = [
   "Other",
 ];
 
-const MAX_COVER_BYTES = 50 * 1024 * 1024;
 
 function ValidCheck() {
   return (
@@ -56,8 +55,7 @@ function ValidCheck() {
 }
 
 export function CampaignNewBasicsPage() {
-  const navigate = useNavigate();
-  const { draft, paths, update, saveNow, loading } = useCampaignWizard();
+  const { draft, update, goToStep, loading } = useCampaignWizard();
   const { goBack, backLabel } = useWizardBack();
   const { getToken } = useAuth();
   const { toast } = useToast();
@@ -94,12 +92,9 @@ export function CampaignNewBasicsPage() {
 
   const onCoverSelected = async (file: File | undefined) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast("Cover must be an image (PNG, JPG, or WEBP).", "error");
-      return;
-    }
-    if (file.size > MAX_COVER_BYTES) {
-      toast("Cover image must be 50MB or smaller.", "error");
+    const problem = checkCoverFile(file);
+    if (problem) {
+      toast(problem, "error");
       return;
     }
     const token = getToken();
@@ -188,7 +183,7 @@ export function CampaignNewBasicsPage() {
                 <input
                   ref={coverInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept={COVER_ACCEPT}
                   className="hidden"
                   onChange={(e) => void onCoverSelected(e.target.files?.[0])}
                 />
@@ -415,7 +410,9 @@ export function CampaignNewBasicsPage() {
                 id: "next",
                 label: "Next: Brief & Rules",
                 onClick: () => {
-                  void saveNow("brief").then(() => navigate(paths.brief));
+                  void goToStep("brief").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: {

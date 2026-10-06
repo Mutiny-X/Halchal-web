@@ -24,7 +24,10 @@ import {
 import { WizardStepper } from "@/features/campaigns/components/wizard-stepper";
 import { useCampaignDraftSave } from "@/features/campaigns/hooks/use-campaign-draft-save";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
-import { hasInvalidReferenceAssets } from "@/features/campaigns/lib/campaign-payload";
+import {
+  hasInvalidReferenceAssets,
+  validateMoneyFields,
+} from "@/features/campaigns/lib/campaign-payload";
 import type { ReferenceAsset } from "@/features/campaigns/lib/reference-assets";
 import {
   estimateMinClippersNeeded,
@@ -77,7 +80,7 @@ export function CampaignReviewPage() {
   const { goBack, backLabel } = useWizardBack();
   const role = usePortalRole();
   const isAdmin = role === "admin";
-  const { draft, paths } = useCampaignWizard();
+  const { draft, paths, autoSave, dirty, requestSaveLiveChanges } = useCampaignWizard();
   const { toast } = useToast();
   const { publishWithFeedback, saving } = useCampaignDraftSave();
   const [previewAsset, setPreviewAsset] = useState<ReferenceAsset | null>(null);
@@ -97,13 +100,9 @@ export function CampaignReviewPage() {
   // clippers — deducting the fee again here would double-count it.
   const estimatedViews = estimateViewsFromBudget(budget, rate);
   const minClippersNeeded = estimateMinClippersNeeded(budget, maxPayout);
-  const budgetValid =
-    Number.isFinite(rate) &&
-    rate > 0 &&
-    Number.isFinite(maxPayout) &&
-    maxPayout >= 1000 &&
-    Number.isFinite(budget) &&
-    budget >= maxPayout;
+  const moneyErrors = validateMoneyFields(draft);
+  const budgetValid = !moneyErrors.rate && !moneyErrors.maxPayout && !moneyErrors.budget;
+  const hasSourceAsset = draft.sourceAssets.some((a) => a.url.trim().length > 0);
 
   const checklist = [
     { label: "Campaign name", ok: draft.title.trim().length > 0, path: paths.basics },
@@ -114,6 +113,8 @@ export function CampaignReviewPage() {
       path: paths.basics,
     },
     { label: "Creative brief written", ok: draft.briefHook.trim().length > 0, path: paths.brief },
+    { label: "Do & Avoid points added", ok: doPoints.length > 0 && avoidPoints.length > 0, path: paths.brief },
+    { label: "Source assets added", ok: hasSourceAsset, path: paths.brief },
     { label: "Sample content uploaded", ok: !invalidAssets, path: paths.brief },
     { label: "Budget & payout configured", ok: budgetValid, path: paths.payout },
   ];
@@ -409,17 +410,30 @@ export function CampaignReviewPage() {
               buttonProps: { size: "sm", variant: "outline" },
             }}
             rightActions={[
-              {
-                id: "publish",
-                label: saving ? "Publishing..." : "Publish Campaign",
-                onClick: () => void onPublish(),
-                icon: !saving ? <Rocket className="h-4 w-4" /> : undefined,
-                buttonProps: {
-                  size: "sm",
-                  variant: "success",
-                  disabled: saving || !readyToPublish,
-                },
-              },
+              autoSave
+                ? {
+                    id: "publish",
+                    label: saving ? "Publishing..." : "Publish Campaign",
+                    onClick: () => void onPublish(),
+                    icon: !saving ? <Rocket className="h-4 w-4" /> : undefined,
+                    buttonProps: {
+                      size: "sm",
+                      variant: "success",
+                      disabled: saving || !readyToPublish,
+                    },
+                  }
+                : {
+                    // Already live/paused/closed: nothing to publish — edits are
+                    // saved explicitly, after a confirm, since creators see them.
+                    id: "save-live",
+                    label: dirty ? "Save changes" : "No unsaved changes",
+                    onClick: requestSaveLiveChanges,
+                    buttonProps: {
+                      size: "sm",
+                      variant: "success",
+                      disabled: !dirty || !budgetValid,
+                    },
+                  },
             ]}
           />
         </div>

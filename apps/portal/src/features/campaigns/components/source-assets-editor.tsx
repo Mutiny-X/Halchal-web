@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, HardDrive, Loader2, Trash2, Upload, Youtub
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MEDIA_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { Label } from "@/components/ui/label";
 import {
   createSourceAsset,
@@ -27,7 +28,8 @@ type UrlCheckState =
 
 type SourceAssetsEditorProps = {
   assets: SourceAsset[];
-  onChange: (assets: SourceAsset[]) => void;
+  /** Pass a function to apply a change to the LATEST list (see updateAsset). */
+  onChange: (next: SourceAsset[] | ((current: SourceAsset[]) => SourceAsset[])) => void;
   onUploadFile: (file: File) => Promise<string>;
   onCheckUrl: (url: string) => Promise<{ fetchable: boolean; reason?: string }>;
 };
@@ -36,18 +38,19 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [urlChecks, setUrlChecks] = useState<Record<string, UrlCheckState>>({});
 
+  // Changes apply to the latest list — see ReferenceAssetsEditor.updateAsset.
   const updateAsset = (id: string, patch: Partial<SourceAsset>) => {
-    onChange(
-      assets.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
+    onChange((current) =>
+      current.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)),
     );
   };
 
   const removeAsset = (id: string) => {
-    onChange(assets.filter((asset) => asset.id !== id));
+    onChange((current) => current.filter((asset) => asset.id !== id));
   };
 
   const addAsset = (type: SourceAssetType) => {
-    onChange([...assets, createSourceAsset({ type })]);
+    onChange((current) => [...current, createSourceAsset({ type })]);
   };
 
   const onSelectFile = async (asset: SourceAsset, file: File | undefined): Promise<void> => {
@@ -55,7 +58,13 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
     setUploadingId(asset.id);
     try {
       const url = await onUploadFile(file);
-      updateAsset(asset.id, { url, label: asset.label.trim() ? asset.label : file.name });
+      onChange((current) =>
+        current.map((a) =>
+          a.id === asset.id ? { ...a, url, label: a.label.trim() ? a.label : file.name } : a,
+        ),
+      );
+    } catch {
+      // onUploadFile has already shown the reason to the user.
     } finally {
       setUploadingId(null);
     }
@@ -138,7 +147,7 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                         Replace
                         <input
                           type="file"
-                          accept="video/*,image/*"
+                          accept={MEDIA_ACCEPT}
                           className="hidden"
                           disabled={isUploading}
                           onChange={(e) => void onSelectFile(asset, e.target.files?.[0])}
@@ -157,7 +166,7 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                       {isUploading ? "Uploading…" : "Choose a video or image file"}
                       <input
                         type="file"
-                        accept="video/*,image/*"
+                        accept={MEDIA_ACCEPT}
                         className="hidden"
                         disabled={isUploading}
                         onChange={(e) => void onSelectFile(asset, e.target.files?.[0])}
