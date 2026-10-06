@@ -31,10 +31,53 @@ export class ApiError extends Error {
   constructor(
     public code: string,
     message: string,
+    /** HTTP status when there was a response; undefined when the request
+     * never reached the server. */
+    public status?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+const NETWORK_ERROR_MESSAGE =
+  "Can't reach the server. Check your connection and try again.";
+const SERVER_UNAVAILABLE_MESSAGE =
+  "The server is temporarily unavailable. Please try again in a moment.";
+
+/** fetch + JSON parse that never throws a raw TypeError/SyntaxError: no
+ * network becomes NETWORK_ERROR, and a non-JSON reply (a proxy's 502 HTML
+ * page, say) comes back as `body: null` for the caller to classify. */
+async function sendRequest(
+  url: string,
+  init: RequestInit,
+): Promise<{ res: Response; body: ApiEnvelope<unknown> | null }> {
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+  }
+  let body: ApiEnvelope<unknown> | null = null;
+  try {
+    body = (await res.json()) as ApiEnvelope<unknown>;
+  } catch {
+    body = null;
+  }
+  return { res, body };
+}
+
+function toApiError(res: Response, body: ApiEnvelope<unknown> | null): ApiError {
+  if (!body || typeof body !== "object" || !("success" in body)) {
+    return res.status >= 500
+      ? new ApiError("SERVER_UNAVAILABLE", SERVER_UNAVAILABLE_MESSAGE, res.status)
+      : new ApiError("INTERNAL_ERROR", `Request failed (HTTP ${res.status})`, res.status);
+  }
+  return new ApiError(
+    body.error?.code ?? "INTERNAL_ERROR",
+    body.error?.message ?? "Request failed",
+    res.status,
+  );
 }
 
 type ApiAuthHandlers = {
@@ -43,37 +86,53 @@ type ApiAuthHandlers = {
   onSessionExpired: () => void;
 };
 
+/** Only a real refusal from the server ends the session. A dropped
+ * connection or a server hiccup during the refresh says nothing about the
+ * token, so the user stays signed in (and keeps any unsaved work). */
+type RefreshOutcome =
+  | { kind: "refreshed"; accessToken: string }
+  | { kind: "expired" }
+  | { kind: "unavailable" };
+
 let apiAuthHandlers: ApiAuthHandlers | null = null;
-let refreshInFlight: Promise<string | null> | null = null;
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
 export function registerApiAuthHandlers(handlers: ApiAuthHandlers): void {
   apiAuthHandlers = handlers;
 }
 
-async function refreshAccessToken(): Promise<string | null> {
-  if (!apiAuthHandlers) return null;
+async function refreshAccessToken(): Promise<RefreshOutcome> {
+  if (!apiAuthHandlers) return { kind: "expired" };
 
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
+    refreshInFlight = (async (): Promise<RefreshOutcome> => {
       const refreshToken = apiAuthHandlers!.getRefreshToken();
-      if (!refreshToken) return null;
+      if (!refreshToken) {
+        apiAuthHandlers!.onSessionExpired();
+        return { kind: "expired" };
+      }
 
       try {
-        const res = await fetch(`${API_BASE}/auth/refresh`, {
+        const { res, body } = await sendRequest(`${API_BASE}/auth/refresh`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ refreshToken }),
         });
-        const body = (await res.json()) as ApiEnvelope<AuthResponse>;
-        if (!res.ok || !body.success || !body.data) {
-          apiAuthHandlers!.onSessionExpired();
-          return null;
+        const session = (body as ApiEnvelope<AuthResponse> | null)?.data;
+        if (res.ok && body?.success && session) {
+          apiAuthHandlers!.onSessionRefreshed(session);
+          return { kind: "refreshed", accessToken: session.tokens.accessToken };
         }
-        apiAuthHandlers!.onSessionRefreshed(body.data);
-        return body.data.tokens.accessToken;
+        // The server answered and refused the refresh token: that's a real
+        // expiry. Anything else — 5xx, a proxy page, 429 rate limiting — is
+        // temporary and must not sign the user out.
+        if (body && (res.status === 400 || res.status === 401 || res.status === 403)) {
+          apiAuthHandlers!.onSessionExpired();
+          return { kind: "expired" };
+        }
+        return { kind: "unavailable" };
       } catch {
-        apiAuthHandlers!.onSessionExpired();
-        return null;
+        return { kind: "unavailable" };
       } finally {
         refreshInFlight = null;
       }
@@ -102,55 +161,54 @@ async function authedFetch<T>(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  const body = (await res.json()) as ApiEnvelope<T>;
+  const { res, body } = await sendRequest(`${API_BASE}${path}`, { ...init, headers });
 
   if (
     res.status === 401 &&
-    body.error?.code === "UNAUTHORIZED" &&
+    body?.error?.code === "UNAUTHORIZED" &&
     accessToken &&
     !_retried &&
     apiAuthHandlers
   ) {
-    const nextToken = await refreshAccessToken();
-    if (nextToken) {
+    const outcome = await refreshAccessToken();
+    if (outcome.kind === "refreshed") {
       return authedFetch<T>(path, {
         ...options,
-        accessToken: nextToken,
+        accessToken: outcome.accessToken,
         _retried: true,
       });
     }
+    if (outcome.kind === "unavailable") {
+      throw new ApiError(
+        "NETWORK_ERROR",
+        "Couldn't refresh your session — check your connection and try again. You're still signed in.",
+      );
+    }
+    throw new ApiError("UNAUTHORIZED", "Your session expired. Please log in again.", 401);
   }
 
-  if (!res.ok || !body.success || body.data === null) {
-    throw new ApiError(
-      body.error?.code ?? "INTERNAL_ERROR",
-      body.error?.message ?? "Request failed",
-    );
+  if (!res.ok || !body?.success || body.data === null) {
+    throw toApiError(res, body);
   }
 
-  return body.data;
+  return body.data as T;
 }
 
 export async function apiFetchPublic<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const { res, body } = await sendRequest(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
   });
-  const body = (await res.json()) as ApiEnvelope<T>;
-  if (!res.ok || !body.success || body.data === null) {
-    throw new ApiError(
-      body.error?.code ?? "INTERNAL_ERROR",
-      body.error?.message ?? "Request failed",
-    );
+  if (!res.ok || !body?.success || body.data === null) {
+    throw toApiError(res, body);
   }
-  return body.data;
+  return body.data as T;
 }
 
 export async function apiFetch<T>(
@@ -873,11 +931,16 @@ const campaignsApi = {
       },
     );
 
-    const putRes = await fetch(uploadUrl, {
-      method: "PUT",
-      body: file,
-      headers: { "Content-Type": file.type },
-    });
+    let putRes: Response;
+    try {
+      putRes = await fetch(uploadUrl, {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": file.type },
+      });
+    } catch {
+      throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+    }
     if (!putRes.ok) {
       throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status})`);
     }

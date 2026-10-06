@@ -9,6 +9,7 @@ import {
   createSourceAsset,
   type SourceAsset,
   type SourceAssetType,
+  sourceLinkProblem,
 } from "@/features/campaigns/lib/source-assets";
 const typeOptions: {
   value: SourceAssetType;
@@ -190,10 +191,14 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                         setUrlChecks((prev) => ({ ...prev, [asset.id]: { status: "idle" } }));
                       }}
                       onBlur={() => {
-                        if (asset.type === "drive") void runUrlCheck(asset);
+                        // No point asking the server to fetch a link that's
+                        // the wrong kind — the field error below says why.
+                        if (asset.type === "drive" && !sourceLinkProblem(asset.type, asset.url)) {
+                          void runUrlCheck(asset);
+                        }
                       }}
                     />
-                    {asset.type === "drive" && asset.url.trim() ? (
+                    {asset.type === "drive" && asset.url.trim() && !sourceLinkProblem(asset.type, asset.url) ? (
                       <Button
                         type="button"
                         size="sm"
@@ -210,6 +215,12 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                       </Button>
                     ) : null}
                   </div>
+                  {sourceLinkProblem(asset.type, asset.url) ? (
+                    <p className="flex items-start gap-1.5 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      {sourceLinkProblem(asset.type, asset.url)}
+                    </p>
+                  ) : null}
                   {asset.type === "drive" && urlChecks[asset.id]?.status === "ok" ? (
                     <p className="flex items-center gap-1.5 text-xs text-green-400">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />

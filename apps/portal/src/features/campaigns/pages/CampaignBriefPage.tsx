@@ -26,6 +26,7 @@ import { ApiError, brandApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import { sourceLinkProblem } from "@/features/campaigns/lib/source-assets";
 import {
   checkMediaFile,
   usesDirectUpload,
@@ -113,7 +114,9 @@ export function CampaignBriefPage() {
 
   const hasValidSourceAssets =
     draft.sourceAssets.length > 0 &&
-    draft.sourceAssets.every((a) => a.url.trim().length > 0);
+    draft.sourceAssets.every(
+      (a) => a.url.trim().length > 0 && !sourceLinkProblem(a.type, a.url),
+    );
 
   const canContinue =
     draft.briefHook.trim().length > 0 &&

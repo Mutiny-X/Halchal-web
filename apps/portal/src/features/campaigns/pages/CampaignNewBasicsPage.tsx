@@ -257,6 +257,13 @@ export function CampaignNewBasicsPage() {
                   />
                   {draft.title.trim() && <ValidCheck />}
                 </div>
+                {!draft.title.trim() && (
+                  <p className="text-xs text-muted" role="status">
+                    {draft.campaignId
+                      ? "Campaign name is required — your other changes still save, and the campaign keeps its last name until you type a new one."
+                      : "Give your campaign a name to start saving your progress."}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">

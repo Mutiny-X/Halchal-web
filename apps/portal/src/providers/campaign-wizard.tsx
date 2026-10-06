@@ -232,6 +232,9 @@ export function CampaignWizardProvider({
       // stale (paused from another tab, say), and re-sending it would undo
       // that. Only publish() moves a campaign to live.
       const { status: _status, ...body } = buildCampaignBody(current, current.status);
+      // A cleared name isn't saved (the campaign keeps its last name and the
+      // Basics step shows "Campaign name is required") — everything else is.
+      if (!current.title.trim()) delete body.title;
       const payload: Record<string, unknown> = {
         ...body,
         wizardStep: opts.wizardStep ?? currentStepRef.current,
