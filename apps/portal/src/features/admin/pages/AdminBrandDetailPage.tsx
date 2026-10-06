@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -11,6 +12,7 @@ import { useToast } from "@/components/ui/toaster";
 import { formatPlatformList } from "@/features/campaigns/lib/platform-labels";
 import { adminApi, ApiError, portalApi, type AdminBrandDetail, type Campaign } from "@/lib/api";
 import { useAuth } from "@/providers/auth-provider";
+import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
 
 /* ── helpers ── */
 function initials(name: string) {
@@ -27,6 +29,7 @@ function formatBudget(paise: number) {
 const STATUS_STYLE: Record<string, string> = {
   live:   "bg-emerald-500 text-white",
   draft:  "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-500 text-white",
 };
@@ -64,7 +67,7 @@ function CampaignCard({ c, onClick }: { c: Campaign & { submissionCount?: number
           </div>
           {/* Status */}
           <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>
-            {c.status}
+            {campaignStatusLabel(c.status)}
           </span>
         </div>
 
@@ -256,7 +259,7 @@ function EditBrandModal({ brand, onClose }: { brand: AdminBrandDetail; onClose: 
               </div>
             )}
             <div>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              <input ref={fileInputRef} type="file" accept={COVER_ACCEPT} className="hidden" onChange={handleFileChange} />
               <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
                 {pendingLogoFile ? "Image selected ✓" : "Change logo"}
               </Button>

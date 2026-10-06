@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { Plus, Search } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
@@ -152,7 +153,7 @@ function CreateBrandModal({ onClose }: { onClose: () => void }) {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*"
+                    accept={COVER_ACCEPT}
                     className="hidden"
                     onChange={handleLogoChange}
                   />

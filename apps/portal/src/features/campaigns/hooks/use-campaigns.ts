@@ -60,7 +60,7 @@ export function useUpdateCampaignStatus() {
       status,
     }: {
       id: string;
-      status: "draft" | "live" | "paused" | "closed";
+      status: "draft" | "pending_review" | "live" | "paused" | "closed";
     }) => {
       const token = getToken();
       if (!token) throw new Error("Your session expired. Please log in again.");

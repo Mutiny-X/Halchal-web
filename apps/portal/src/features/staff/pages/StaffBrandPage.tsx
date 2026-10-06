@@ -9,6 +9,7 @@ import { useToast } from "@/components/ui/toaster";
 import { formatPlatformList } from "@/features/campaigns/lib/platform-labels";
 import { staffApi, type Campaign } from "@/lib/api";
 import { useAuth } from "@/providers/auth-provider";
+import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
 
 /* ── helpers (same as AdminBrandDetailPage) ── */
 function initials(name: string) {
@@ -25,6 +26,7 @@ function formatBudget(paise: number) {
 const STATUS_STYLE: Record<string, string> = {
   live: "bg-emerald-500 text-white",
   draft: "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-500 text-white",
 };
@@ -54,7 +56,7 @@ function CampaignCard({ c, onClick }: { c: Campaign & { submissionCount?: number
               <span key={p} className="rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">{p}</span>
             ))}
           </div>
-          <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>{c.status}</span>
+          <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>{campaignStatusLabel(c.status)}</span>
         </div>
         <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/70 to-transparent" />
       </div>
