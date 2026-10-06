@@ -180,6 +180,8 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
                   <Label className="text-xs text-muted">URL</Label>
                   <div className="flex gap-2">
                     <Input
+                      name="campaign-source-link"
+                      autoComplete="off"
                       value={asset.url}
                       placeholder={
                         asset.type === "youtube"
@@ -238,6 +240,8 @@ export function SourceAssetsEditor({ assets, onChange, onUploadFile, onCheckUrl 
               <div className="space-y-1">
                 <Label className="text-xs text-muted">Label (optional)</Label>
                 <Input
+                  name="campaign-source-caption"
+                  autoComplete="off"
                   value={asset.label}
                   onChange={(e) => updateAsset(asset.id, { label: e.target.value })}
                 />

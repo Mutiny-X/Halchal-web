@@ -185,6 +185,8 @@ export function CampaignBriefPage() {
               <CardHeader icon={Lightbulb} title="Creative Brief" />
               <p className="mb-3 text-xs text-muted">Hook, tone, and key messaging.</p>
               <textarea
+                name="campaign-brief"
+                autoComplete="off"
                 className="min-h-[140px] w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted/70 outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/15"
                 placeholder="e.g. Open with a bold question in the first 3 seconds. Keep the tone energetic and youth-focused. Highlight the product benefit clearly before the 10-second mark."
                 maxLength={1000}

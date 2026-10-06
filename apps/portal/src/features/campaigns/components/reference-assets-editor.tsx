@@ -195,6 +195,8 @@ export function ReferenceAssetsEditor({
                     {option?.label ?? asset.type}
                   </span>
                   <Input
+                    name="campaign-sample-caption"
+                    autoComplete="off"
                     value={asset.label}
                     placeholder="Label (optional)"
                     className="h-7 text-xs"

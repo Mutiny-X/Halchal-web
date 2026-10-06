@@ -252,6 +252,8 @@ export function CampaignNewBasicsPage() {
                 </label>
                 <div className="relative">
                   <Input
+                    name="campaign-title"
+                    autoComplete="off"
                     id="title"
                     value={draft.title}
                     onChange={(e) => update({ title: e.target.value })}
@@ -308,6 +310,8 @@ export function CampaignNewBasicsPage() {
                 </div>
                 {customCategoryOpen && (
                   <Input
+                    name="campaign-custom-category"
+                    autoComplete="off"
                     value={draft.category}
                     onChange={(e) => update({ category: e.target.value })}
                     placeholder="Enter your category"

@@ -87,6 +87,8 @@ export function CampaignPayoutPage() {
                   </label>
                   <p className="-mt-1.5 text-xs text-muted">₹ per 1,000 valid views.</p>
                   <Input
+                    name="campaign-rate"
+                    autoComplete="off"
                     id="rate"
                     type="number"
                     min={1}
@@ -103,6 +105,8 @@ export function CampaignPayoutPage() {
                   </label>
                   <p className="-mt-1.5 text-xs text-muted">Cap per creator.</p>
                   <Input
+                    name="campaign-max-payout"
+                    autoComplete="off"
                     id="max"
                     type="number"
                     min={1000}
@@ -120,6 +124,8 @@ export function CampaignPayoutPage() {
                 </label>
                 <p className="-mt-1.5 text-xs text-muted">Total campaign budget.</p>
                 <Input
+                  name="campaign-budget"
+                  autoComplete="off"
                   id="budget"
                   type="number"
                   min={1000}
