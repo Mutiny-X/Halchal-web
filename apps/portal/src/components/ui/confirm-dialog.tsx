@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -12,10 +12,6 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   loading?: boolean;
   variant?: "default" | "destructive";
-  /** Disables the confirm button (e.g. until a required field is filled). */
-  confirmDisabled?: boolean;
-  /** Extra content (such as a reason field) shown under the description. */
-  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -28,8 +24,6 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   loading = false,
   variant = "default",
-  confirmDisabled = false,
-  children,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -71,7 +65,6 @@ export function ConfirmDialog({
         <p id="confirm-dialog-description" className="mt-2 text-sm text-muted">
           {description}
         </p>
-        {children ? <div className="mt-4">{children}</div> : null}
         <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={loading}>
             {cancelLabel}
@@ -82,7 +75,7 @@ export function ConfirmDialog({
             variant={variant === "destructive" ? "destructive" : "default"}
             className={cn(variant === "default" && "bg-primary")}
             onClick={onConfirm}
-            disabled={loading || confirmDisabled}
+            disabled={loading}
           >
             {loading ? "Updating..." : confirmLabel}
           </Button>

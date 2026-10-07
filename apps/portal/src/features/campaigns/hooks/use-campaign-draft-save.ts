@@ -1,9 +1,12 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { hasInvalidReferenceAssets } from "@/features/campaigns/lib/campaign-payload";
-import { ApiError } from "@/lib/api";
-import { usePortalRole } from "@/providers/auth-provider";
+import {
+  buildCampaignBody,
+  hasInvalidReferenceAssets,
+} from "@/features/campaigns/lib/campaign-payload";
+import { ApiError, portalApi } from "@/lib/api";
+import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 
 function apiErrorMessage(error: unknown, fallback: string): string {
@@ -14,28 +17,46 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 
 export function useCampaignDraftSave() {
   const navigate = useNavigate();
+  const { getToken } = useAuth();
   const role = usePortalRole();
   const isAdmin = role === "admin";
-  const { draft, reset, publish: publishFromWizard } = useCampaignWizard();
-  const [publishing, setPublishing] = useState(false);
+  const { draft, reset } = useCampaignWizard();
+  const [saving, setSaving] = useState(false);
 
   const campaignsBase = isAdmin ? "/admin/campaigns" : "/campaigns";
 
-  const publish = useCallback(async (): Promise<{ id: string; status: string }> => {
+  const publish = useCallback(async (): Promise<{ id: string }> => {
     if (hasInvalidReferenceAssets(draft.referenceAssets)) {
       throw new Error(
         "Upload files for all image/video sample content before publishing.",
       );
     }
-    setPublishing(true);
-    try {
-      // Goes through the wizard's save queue: any pending auto-save is
-      // folded in and runs first, so nothing can land after the publish.
-      return await publishFromWizard();
-    } finally {
-      setPublishing(false);
+
+    const token = getToken();
+    if (!token) {
+      throw new Error("Your session expired. Please log in again.");
     }
-  }, [draft.referenceAssets, publishFromWizard]);
+
+    setSaving(true);
+    try {
+      const body = buildCampaignBody(draft, "live");
+      if (draft.campaignId) {
+        const updated = await portalApi.campaigns.update(
+          token,
+          draft.campaignId,
+          { ...body, wizardStep: "review" },
+        );
+        return { id: updated.id };
+      }
+      const created = await portalApi.campaigns.create(token, {
+        ...body,
+        wizardStep: "review",
+      });
+      return { id: created.id };
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, getToken, isAdmin]);
 
   const publishWithFeedback = useCallback(
     async (
@@ -43,12 +64,7 @@ export function useCampaignDraftSave() {
     ): Promise<string | null> => {
       try {
         const result = await publish();
-        toast(
-          result.status === "pending_review"
-            ? "Submitted for approval. It goes live as soon as an admin approves it, and we'll notify you."
-            : "Campaign published. Creators can now discover it.",
-          "success",
-        );
+        toast("Campaign published. Creators can now discover it.", "success");
         reset();
         navigate(campaignsBase);
         return result.id;
@@ -63,6 +79,6 @@ export function useCampaignDraftSave() {
   return {
     publish,
     publishWithFeedback,
-    saving: publishing,
+    saving,
   };
 }

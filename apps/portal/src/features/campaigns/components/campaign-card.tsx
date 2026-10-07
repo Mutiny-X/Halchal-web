@@ -10,12 +10,10 @@ import { formatCpv, formatInr } from "@/lib/format";
 import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 import type { Campaign } from "@/lib/api";
-import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
 
 const STATUS_STYLE: Record<string, { dot: string; badge: string }> = {
   live: { dot: "bg-emerald-400", badge: "bg-emerald-500/15 text-emerald-400" },
   draft: { dot: "bg-zinc-400", badge: "bg-zinc-500/15 text-zinc-400" },
-  pending_review: { dot: "bg-indigo-400", badge: "bg-indigo-500/15 text-indigo-400" },
   paused: { dot: "bg-orange-400", badge: "bg-orange-500/15 text-orange-400" },
   closed: { dot: "bg-red-400", badge: "bg-red-500/15 text-red-400" },
 };
@@ -72,7 +70,7 @@ export function CampaignCard({
               )}
             >
               <span className={cn("h-1.5 w-1.5 rounded-full", style.dot)} />
-              {campaignStatusLabel(campaign.status)}
+              {campaign.status}
             </span>
             <div onClick={(e) => e.stopPropagation()}>
               <CampaignRowActions campaign={campaign} onMenuAction={onMenuAction} basePath={basePath} />

@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 const styles: Record<string, string> = {
   live: "bg-money/15 text-money",
   draft: "bg-surface-variant text-muted",
-  pending_review: "bg-primary/15 text-primary",
   paused: "bg-warning/15 text-warning",
   closed: "bg-muted/20 text-muted",
   draft_submitted: "bg-warning/15 text-warning",
@@ -38,7 +37,6 @@ const styles: Record<string, string> = {
 
 const labels: Record<string, string> = {
   closed: "ENDED",
-  pending_review: "AWAITING APPROVAL",
   support_ticket_under_review: "UNDER REVIEW",
   closed_at_threshold: "CLOSED",
   manually_extended: "EXTENDED",

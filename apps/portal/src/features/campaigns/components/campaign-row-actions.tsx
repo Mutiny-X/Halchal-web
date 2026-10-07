@@ -4,11 +4,8 @@ import {
   Pause,
   Pencil,
   Play,
-  Send,
-  ShieldCheck,
   Square,
   Trash2,
-  Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -21,7 +18,7 @@ import type { Campaign } from "@/lib/api";
 export type CampaignMenuAction =
   | {
       kind: "status";
-      status: "draft" | "pending_review" | "live" | "paused" | "closed";
+      status: "live" | "paused" | "closed";
       label: string;
       title: string;
       description: string;
@@ -42,7 +39,7 @@ export type CampaignMenuAction =
 const MENU_WIDTH = 176;
 const MENU_GAP = 6;
 
-export function getCampaignMenuActions(campaign: Campaign, isAdmin = false): CampaignMenuAction[] {
+export function getCampaignMenuActions(campaign: Campaign): CampaignMenuAction[] {
   const canDelete =
     (campaign.status === "draft" || campaign.status === "closed") &&
     (campaign.submissionCount ?? 0) === 0;
@@ -50,34 +47,19 @@ export function getCampaignMenuActions(campaign: Campaign, isAdmin = false): Cam
   switch (campaign.status) {
     case "draft": {
       const ready = isCampaignReadyToPublish(campaign);
-      const notReadyReason = ready
-        ? undefined
-        : "Finish setting up this campaign (brief, sample content, budget) before publishing.";
       return [
-        // Admins approve, so they publish directly; everyone else submits
-        // for approval and the campaign goes live when an admin approves it.
-        isAdmin
-          ? {
-              kind: "status",
-              status: "live",
-              label: "Set live",
-              title: "Set live",
-              description: "Publish this campaign so creators can discover and submit content.",
-              confirmLabel: "Set live",
-              disabled: !ready,
-              disabledReason: notReadyReason,
-            }
-          : {
-              kind: "status",
-              status: "pending_review",
-              label: "Submit for approval",
-              title: "Submit for approval",
-              description:
-                "An admin will review this campaign. It goes live for creators as soon as it's approved. You can't edit it while it's waiting, but you can withdraw it.",
-              confirmLabel: "Submit",
-              disabled: !ready,
-              disabledReason: notReadyReason,
-            },
+        {
+          kind: "status",
+          status: "live",
+          label: "Set live",
+          title: "Set live",
+          description: "Publish this campaign so creators can discover and submit content.",
+          confirmLabel: "Set live",
+          disabled: !ready,
+          disabledReason: ready
+            ? undefined
+            : "Finish setting up this campaign (brief, sample content, budget) before publishing.",
+        },
         {
           kind: "status",
           status: "closed",
@@ -94,7 +76,7 @@ export function getCampaignMenuActions(campaign: Campaign, isAdmin = false): Cam
                 label: "Delete",
                 title: "Delete",
                 description:
-                  "Permanently remove this campaign, its uploaded files and any creators' submissions and drafts for it. Payments already made to creators stay in their wallets. This cannot be undone.",
+                  "Permanently remove this campaign. This cannot be undone.",
                 confirmLabel: "Delete",
                 variant: "destructive" as const,
               },
@@ -102,21 +84,6 @@ export function getCampaignMenuActions(campaign: Campaign, isAdmin = false): Cam
           : []),
       ];
     }
-    case "pending_review":
-      // Admins review from the campaign page (approve, or reject with a reason).
-      return isAdmin
-        ? []
-        : [
-            {
-              kind: "status",
-              status: "draft",
-              label: "Withdraw to edit",
-              title: "Withdraw from review",
-              description:
-                "This takes the campaign out of the approval queue and back to a draft so you can edit it. Submit it again when you're ready.",
-              confirmLabel: "Withdraw",
-            },
-          ];
     case "live":
       return [
         {
@@ -166,7 +133,7 @@ export function getCampaignMenuActions(campaign: Campaign, isAdmin = false): Cam
               label: "Delete",
               title: "Delete",
               description:
-                "Permanently remove this campaign, its uploaded files and any creators' submissions and drafts for it. Payments already made to creators stay in their wallets. This cannot be undone.",
+                "Permanently remove this campaign. This cannot be undone.",
               confirmLabel: "Delete",
               variant: "destructive",
             },
@@ -198,8 +165,7 @@ export function CampaignRowActions({
   const [position, setPosition] = useState<MenuPosition>({ top: 0, left: 0 });
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const isAdmin = basePath.startsWith("/admin");
-  const menuActions = getCampaignMenuActions(campaign, isAdmin);
+  const menuActions = getCampaignMenuActions(campaign);
 
   const updatePosition = useCallback(() => {
     const trigger = buttonRef.current;
@@ -270,20 +236,9 @@ export function CampaignRowActions({
         width: MENU_WIDTH,
       }}
     >
-      {campaign.status === "pending_review" && isAdmin ? (
-        <Link
-          to={`/admin/campaigns/${campaign.id}`}
-          role="menuitem"
-          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-variant"
-          onClick={() => setOpen(false)}
-        >
-          <ShieldCheck className="h-4 w-4 text-muted" />
-          Review &amp; approve
-        </Link>
-      ) : null}
       {campaign.status === "draft" ? (
         <Link
-          to={getWizardEditPath(campaign.id, isAdmin)}
+          to={getWizardEditPath(campaign.id, basePath.startsWith("/admin"))}
           role="menuitem"
           className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-variant"
           onClick={() => setOpen(false)}
@@ -319,10 +274,6 @@ export function CampaignRowActions({
             <Trash2 className="h-4 w-4" />
           ) : action.status === "live" ? (
             <Play className="h-4 w-4" />
-          ) : action.status === "pending_review" ? (
-            <Send className="h-4 w-4" />
-          ) : action.status === "draft" ? (
-            <Undo2 className="h-4 w-4" />
           ) : action.status === "paused" ? (
             <Pause className="h-4 w-4" />
           ) : (

@@ -4,7 +4,6 @@ import type { CampaignStatusFilter } from "@/lib/api";
 const tabs: { value: CampaignStatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "draft", label: "Draft" },
-  { value: "pending_review", label: "Awaiting approval" },
   { value: "live", label: "Live" },
   { value: "paused", label: "Paused" },
   { value: "closed", label: "Ended" },

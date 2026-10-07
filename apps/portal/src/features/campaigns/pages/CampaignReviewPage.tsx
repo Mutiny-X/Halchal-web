@@ -3,22 +3,15 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
-  ExternalLink,
   Eye,
   HardDrive,
   MapPin,
   PlayCircle,
   Rocket,
-  Send,
-  ShieldCheck,
-  Undo2,
-  Upload,
   UserPlus,
   Youtube,
 } from "lucide-react";
 
-import { StatusPill } from "@/components/ui/status-pill";
-import { RejectCampaignDialog } from "@/features/campaigns/components/reject-campaign-dialog";
 import { useToast } from "@/components/ui/toaster";
 import {
   CampaignWizardFooter,
@@ -31,14 +24,8 @@ import {
 import { WizardStepper } from "@/features/campaigns/components/wizard-stepper";
 import { useCampaignDraftSave } from "@/features/campaigns/hooks/use-campaign-draft-save";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
-import {
-  hasInvalidReferenceAssets,
-  validateMoneyFields,
-} from "@/features/campaigns/lib/campaign-payload";
-import { checkoutTotals, formatRupeeAmount, PLATFORM_FEE_RATE } from "@/features/campaigns/lib/pricing";
+import { hasInvalidReferenceAssets } from "@/features/campaigns/lib/campaign-payload";
 import type { ReferenceAsset } from "@/features/campaigns/lib/reference-assets";
-import type { SourceAssetType } from "@/features/campaigns/lib/source-assets";
-import { startDateProblem } from "@/features/campaigns/lib/start-date";
 import {
   estimateMinClippersNeeded,
   estimateViewsFromBudget,
@@ -49,7 +36,7 @@ import { parseRulePoints } from "@/features/campaigns/lib/rule-points";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/media-url";
 import { usePortalRole } from "@/providers/auth-provider";
-import { useCampaignWizard, type CampaignDraft } from "@/providers/campaign-wizard";
+import { useCampaignWizard } from "@/providers/campaign-wizard";
 
 function EditLink({ onClick }: { onClick: () => void }) {
   return (
@@ -85,79 +72,12 @@ function ReviewCard({
   );
 }
 
-const SOURCE_TYPE_META: Record<SourceAssetType, { label: string; icon: typeof HardDrive }> = {
-  drive: { label: "Google Drive link", icon: HardDrive },
-  youtube: { label: "YouTube link", icon: Youtube },
-  upload: { label: "Uploaded file", icon: Upload },
-};
-
-const REQUIREMENT_LABEL: Record<CampaignDraft["sourceVideoRequirement"], string> = {
-  mandatory: "Mandatory",
-  optional: "Optional",
-  not_required: "Not required",
-};
-
-/** "2026-10-07" → "Wed, 7 Oct 2026" (the day as picked, no timezone shift). */
-function formatDay(day: string): string {
-  const date = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return day;
-  return date.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-}
-
-function linkHost(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
-function Missing({ text = "Not set" }: { text?: string }) {
-  return <span className="font-medium text-warning">{text}</span>;
-}
-
-function DetailRow({ label, value }: { label: ReactNode; value: ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-2 text-sm">
-      <dt className="shrink-0 text-muted">{label}</dt>
-      <dd className="min-w-0 text-right font-medium text-foreground">{value}</dd>
-    </div>
-  );
-}
-
-function RuleList({ title, tone, points }: { title: string; tone: "do" | "avoid"; points: string[] }) {
-  return (
-    <div>
-      <p className={cn("mb-2 text-xs font-semibold uppercase tracking-wide", tone === "do" ? "text-money" : "text-destructive")}>
-        {title} ({points.length})
-      </p>
-      {points.length > 0 ? (
-        <ol className="space-y-1.5 text-sm text-foreground">
-          {points.map((point, i) => (
-            <li key={`${i}-${point}`} className="flex gap-2">
-              <span className={cn("w-4 shrink-0 text-right text-xs font-semibold leading-5", tone === "do" ? "text-money" : "text-destructive")}>
-                {i + 1}.
-              </span>
-              <span className="min-w-0 break-words">{point}</span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <Missing />
-      )}
-    </div>
-  );
-}
-
 export function CampaignReviewPage() {
   const navigate = useNavigate();
   const { goBack, backLabel } = useWizardBack();
   const role = usePortalRole();
   const isAdmin = role === "admin";
-  const { draft, paths, autoSave, dirty, locked, requestSaveLiveChanges } = useCampaignWizard();
-  // Admins publish (or approve) directly; brands and staff submit for approval.
-  const reviewingSubmission = isAdmin && draft.status === "pending_review";
-  const [rejectOpen, setRejectOpen] = useState(false);
+  const { draft, paths } = useCampaignWizard();
   const { toast } = useToast();
   const { publishWithFeedback, saving } = useCampaignDraftSave();
   const [previewAsset, setPreviewAsset] = useState<ReferenceAsset | null>(null);
@@ -177,18 +97,16 @@ export function CampaignReviewPage() {
   // clippers — deducting the fee again here would double-count it.
   const estimatedViews = estimateViewsFromBudget(budget, rate);
   const minClippersNeeded = estimateMinClippersNeeded(budget, maxPayout);
-  const moneyErrors = validateMoneyFields(draft);
-  const budgetValid = !moneyErrors.rate && !moneyErrors.maxPayout && !moneyErrors.budget;
-  const hasSourceAsset = draft.sourceAssets.some((a) => a.url.trim().length > 0);
-  const { platformFee, total: checkoutTotal } = checkoutTotals(budget);
+  const budgetValid =
+    Number.isFinite(rate) &&
+    rate > 0 &&
+    Number.isFinite(maxPayout) &&
+    maxPayout >= 1000 &&
+    Number.isFinite(budget) &&
+    budget >= maxPayout;
 
   const checklist = [
     { label: "Campaign name", ok: draft.title.trim().length > 0, path: paths.basics },
-    {
-      label: "Start date (today or later)",
-      ok: Boolean(draft.startDate) && (draft.status !== "draft" || !startDateProblem(draft.startDate)),
-      path: paths.basics,
-    },
     { label: "Target platform selected", ok: draft.platforms.length > 0, path: paths.basics },
     {
       label: "Target location set",
@@ -196,8 +114,6 @@ export function CampaignReviewPage() {
       path: paths.basics,
     },
     { label: "Creative brief written", ok: draft.briefHook.trim().length > 0, path: paths.brief },
-    { label: "Do & Avoid points added", ok: doPoints.length > 0 && avoidPoints.length > 0, path: paths.brief },
-    { label: "Source assets added", ok: hasSourceAsset, path: paths.brief },
     { label: "Sample content uploaded", ok: !invalidAssets, path: paths.brief },
     { label: "Budget & payout configured", ok: budgetValid, path: paths.payout },
   ];
@@ -215,13 +131,7 @@ export function CampaignReviewPage() {
         <div className="pb-24">
           <CampaignWizardHeader
             title="Review your Campaign"
-            subtitle={
-              reviewingSubmission
-                ? "Check everything, then approve it to go live, or send it back to the brand with a reason."
-                : isAdmin
-                  ? "Check all campaign details before publishing to creators."
-                  : "Check all campaign details, then submit it. An admin approves it before creators can see it."
-            }
+            subtitle="Check all campaign details before publishing to creators."
             onBack={goBack}
           />
 
@@ -242,13 +152,7 @@ export function CampaignReviewPage() {
                   <AlertTriangle className="h-4 w-4 text-warning" />
                 )}
                 <p className="text-sm font-semibold text-foreground">
-                  {readyToPublish
-                    ? isAdmin
-                      ? "Ready to publish"
-                      : "Ready to submit for approval"
-                    : isAdmin
-                      ? "Before you publish"
-                      : "Before you submit"}
+                  {readyToPublish ? "Ready to publish" : "Before you publish"}
                 </p>
               </div>
               <div className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
@@ -281,222 +185,189 @@ export function CampaignReviewPage() {
               </div>
             </div>
 
-            {/* ── 1. Overview ── */}
-            <ReviewCard title="Overview" onEdit={() => navigate(paths.basics)}>
-              <div className="grid gap-5 sm:grid-cols-[260px_1fr]">
-                {draft.coverImageUrl ? (
+            {/* ── Basics + Budget ── */}
+            <div className="grid gap-6 sm:grid-cols-2">
+              <ReviewCard title="Basics" onEdit={() => navigate(paths.basics)}>
+                {draft.coverImageUrl && (
                   <img
                     src={resolveMediaUrl(draft.coverImageUrl)}
-                    alt="Campaign cover"
-                    className="aspect-video w-full rounded-xl border border-border object-cover"
+                    alt=""
+                    className="mb-3 aspect-video w-full rounded-lg object-cover"
                   />
-                ) : (
-                  <div className="flex aspect-video w-full items-center justify-center rounded-xl border border-dashed border-border text-xs text-muted">
-                    No cover image
-                  </div>
                 )}
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-lg font-bold text-foreground">{draft.title.trim() || "Untitled campaign"}</p>
-                    <StatusPill status={draft.status} />
-                  </div>
-                  <dl className="mt-3 divide-y divide-border">
-                    <DetailRow label="Category" value={draft.category || <Missing />} />
-                    <DetailRow
-                      label="Platform"
-                      value={
-                        platformOption ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className={cn("flex h-4 w-4 items-center justify-center rounded-full text-white", platformOption.badge)}>
-                              <platformOption.icon className="h-2.5 w-2.5" />
-                            </span>
-                            {platformOption.label}
-                          </span>
-                        ) : (
-                          <Missing />
-                        )
-                      }
-                    />
-                    <DetailRow label="Start date" value={draft.startDate ? formatDay(draft.startDate) : <Missing />} />
-                    <DetailRow
-                      label="Location"
-                      value={
-                        draft.locationType === "pan_india" ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <MapPin className="h-3.5 w-3.5 text-muted" /> Pan India
-                          </span>
-                        ) : draft.targetStates.length > 0 ? (
-                          <span className="flex flex-wrap justify-end gap-1.5">
-                            {draft.targetStates.map((state) => (
-                              <span key={state} className="rounded-full bg-surface-variant px-2 py-0.5 text-xs font-medium">
-                                {state}
-                              </span>
-                            ))}
-                          </span>
-                        ) : (
-                          <Missing />
-                        )
-                      }
-                    />
-                    {role !== "brand" && (
-                      <DetailRow
-                        label="Brand"
-                        value={draft.brandCompanyName || (draft.brandProfileId ? "Assigned" : <Missing text="Not assigned yet" />)}
-                      />
-                    )}
-                  </dl>
-                </div>
-              </div>
-            </ReviewCard>
+                <p className="font-semibold text-foreground">{draft.title || "Untitled campaign"}</p>
+                <p className="text-xs text-muted">{draft.category || "No category"}</p>
 
-            {/* ── 2. Budget & payouts ── */}
-            <ReviewCard title="Budget & payouts" onEdit={() => navigate(paths.payout)}>
-              <div className="grid gap-5 sm:grid-cols-[1fr_260px]">
-                <dl className="divide-y divide-border">
-                  <DetailRow label="Rate" value={moneyErrors.rate ? <Missing text={moneyErrors.rate} /> : `${formatRupeeAmount(rate)} per 1,000 views`} />
-                  <DetailRow label="Max payout per creator" value={moneyErrors.maxPayout ? <Missing text={moneyErrors.maxPayout} /> : formatRupeeAmount(maxPayout)} />
-                  <DetailRow label="Budget pool" value={moneyErrors.budget ? <Missing text={moneyErrors.budget} /> : formatRupeeAmount(budget)} />
-                  <DetailRow label={`Platform fee (${PLATFORM_FEE_RATE * 100}%)`} value={budgetValid ? formatRupeeAmount(platformFee) : "—"} />
-                  <DetailRow
-                    label={<span className="font-semibold text-foreground">Total at checkout</span>}
-                    value={<span className="font-bold text-money">{budgetValid ? formatRupeeAmount(checkoutTotal) : "—"}</span>}
-                  />
-                </dl>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {platformOption && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-variant px-2.5 py-1 text-xs font-medium text-foreground">
+                      <span className={cn("flex h-4 w-4 items-center justify-center rounded-full text-white", platformOption.badge)}>
+                        <platformOption.icon className="h-2.5 w-2.5" />
+                      </span>
+                      {platformOption.label}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-variant px-2.5 py-1 text-xs font-medium text-foreground">
+                    <MapPin className="h-3 w-3" />
+                    {draft.locationType === "pan_india"
+                      ? "Pan India"
+                      : draft.targetStates.length > 0
+                        ? `${draft.targetStates.length} state${draft.targetStates.length !== 1 ? "s" : ""}`
+                        : "Not set"}
+                  </span>
+                </div>
+              </ReviewCard>
+
+              <ReviewCard title="Budget" onEdit={() => navigate(paths.payout)}>
+                <p className="font-semibold text-money">₹{draft.ratePer1kRupees || 0} / 1K views</p>
+                <p className="mt-1 text-xs text-muted">
+                  ₹{Number(draft.budgetRupees || 0).toLocaleString("en-IN")} total pool
+                </p>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
                       <Eye className="h-3.5 w-3.5" />
-                      Estimated views
+                      Estimated Views
                     </div>
                     <p className="mt-1 font-display text-2xl font-black text-foreground">
-                      {budgetValid ? formatEstimatedViews(estimatedViews) : "—"}
+                      {formatEstimatedViews(estimatedViews)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-border bg-surface-variant/40 p-3">
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                       <UserPlus className="h-3.5 w-3.5" />
-                      Min. creators to spend it
+                      Min. Clippers
                     </div>
                     <p className="mt-1 font-display text-2xl font-black text-foreground">
-                      {budgetValid && minClippersNeeded > 0 ? minClippersNeeded.toLocaleString("en-IN") : "—"}
+                      {minClippersNeeded > 0 ? minClippersNeeded.toLocaleString("en-IN") : "—"}
                     </p>
                   </div>
                 </div>
-              </div>
-            </ReviewCard>
+              </ReviewCard>
+            </div>
 
-            {/* ── 3. Creative brief ── */}
-            <ReviewCard title="Creative brief" onEdit={() => navigate(paths.brief)}>
-              {draft.briefHook.trim() ? (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{draft.briefHook.trim()}</p>
-              ) : (
-                <Missing text="No brief written yet" />
-              )}
-              <div className="mt-5 grid gap-5 sm:grid-cols-2">
-                <RuleList title="Do this" tone="do" points={doPoints.map((p) => p.text)} />
-                <RuleList title="Avoid this" tone="avoid" points={avoidPoints.map((p) => p.text)} />
+            {/* ── Content brief ── */}
+            <ReviewCard title="Content Brief" onEdit={() => navigate(paths.brief)}>
+              <div className="grid gap-4 text-sm sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+                    Creative brief
+                  </p>
+                  {draft.briefHook.trim() ? (
+                    <p className="whitespace-pre-wrap text-foreground">{draft.briefHook.trim()}</p>
+                  ) : (
+                    <p className="text-muted">Not set</p>
+                  )}
+                </div>
+                <div>
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-money">
+                    Do this
+                  </p>
+                  {doPoints.length > 0 ? (
+                    <ul className="space-y-1 text-foreground">
+                      {doPoints.map((point) => (
+                        <li key={point.id} className="flex gap-2">
+                          <span className="text-money">•</span>
+                          {point.text}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted">Not set</p>
+                  )}
+                </div>
+                <div>
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-destructive">
+                    Avoid this
+                  </p>
+                  {avoidPoints.length > 0 ? (
+                    <ul className="space-y-1 text-foreground">
+                      {avoidPoints.map((point) => (
+                        <li key={point.id} className="flex gap-2">
+                          <span className="text-destructive">•</span>
+                          {point.text}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted">Not set</p>
+                  )}
+                </div>
               </div>
-            </ReviewCard>
 
-            {/* ── 4. Source assets ── */}
-            <ReviewCard title={`Source assets (${draft.sourceAssets.length})`} onEdit={() => navigate(paths.brief)}>
-              {draft.sourceAssets.length === 0 ? (
-                <Missing text="No source assets added" />
-              ) : (
-                <>
-                  <ul className="divide-y divide-border">
+              {draft.sourceAssets.length > 0 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-1.5 text-xs font-semibold text-muted">Source assets</p>
+                  <ul className="space-y-1.5 text-sm">
                     {draft.sourceAssets.map((asset) => {
-                      const meta = SOURCE_TYPE_META[asset.type];
-                      const href = asset.type === "upload" ? resolveMediaUrl(asset.url) : asset.url;
+                      const Icon = asset.type === "youtube" ? Youtube : HardDrive;
                       return (
-                        <li key={asset.id} className="flex items-center gap-3 py-2.5">
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-variant text-muted">
-                            <meta.icon className="h-4 w-4" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-foreground">
-                              {asset.label.trim() || meta.label}
-                            </p>
-                            <p className="truncate text-xs text-muted">
-                              {meta.label}
-                              {asset.type !== "upload" && asset.url ? ` · ${linkHost(asset.url)}` : ""}
-                            </p>
-                          </div>
-                          {asset.url ? (
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                            >
-                              Open <ExternalLink className="h-3 w-3" />
-                            </a>
-                          ) : (
-                            <Missing text="Missing link" />
-                          )}
+                        <li key={asset.id}>
+                          <a
+                            href={asset.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline"
+                          >
+                            <Icon className="h-3.5 w-3.5 shrink-0" />
+                            {asset.label?.trim() ||
+                              (asset.type === "youtube" ? "YouTube reference" : "Drive reference")}
+                          </a>
                         </li>
                       );
                     })}
                   </ul>
-                  <dl className="mt-3 divide-y divide-border border-t border-border">
-                    <DetailRow label="Creators must use this footage" value={REQUIREMENT_LABEL[draft.sourceVideoRequirement]} />
-                    <DetailRow label="Creators must use this audio/song" value={REQUIREMENT_LABEL[draft.sourceAudioRequirement]} />
-                  </dl>
-                </>
+                </div>
               )}
-            </ReviewCard>
 
-            {/* ── 5. Sample content ── */}
-            <ReviewCard title={`Sample content (${draft.referenceAssets.length})`} onEdit={() => navigate(paths.brief)}>
-              {draft.referenceAssets.length === 0 ? (
-                <p className="text-sm text-muted">No sample content (optional).</p>
-              ) : (
-                <>
-                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+              {draft.referenceAssets.length > 0 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-1.5 text-xs font-semibold text-muted">Sample content</p>
+                  <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
                     {draft.referenceAssets.map((asset) => (
-                      <li key={asset.id} className="overflow-hidden rounded-xl border border-border bg-surface">
+                      <li key={asset.id}>
                         <button
                           type="button"
                           disabled={!asset.url}
                           onClick={() => setPreviewAsset(asset)}
-                          aria-label={`Preview ${asset.label || asset.type}`}
-                          className="relative block aspect-square w-full bg-surface-variant/40 disabled:cursor-not-allowed"
+                          className="relative block aspect-square w-full overflow-hidden rounded-lg border border-border bg-surface-variant/40 disabled:cursor-not-allowed"
                         >
                           {asset.url ? (
                             asset.type === "image" ? (
                               <img
                                 src={resolveMediaUrl(asset.url)}
-                                alt={asset.label || "Sample image"}
+                                alt={asset.label || "Sample preview"}
                                 className="h-full w-full object-cover"
                               />
                             ) : (
                               <>
-                                {/* "#t=0.1" makes browsers draw a real first frame instead of black */}
-                                <video src={`${resolveMediaUrl(asset.url)}#t=0.1`} muted preload="metadata" playsInline className="h-full w-full object-cover" />
-                                <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10">
-                                  <PlayCircle className="h-7 w-7 text-white drop-shadow" />
-                                </span>
+                                <video
+                                  src={resolveMediaUrl(asset.url)}
+                                  muted
+                                  preload="metadata"
+                                  className="h-full w-full object-cover"
+                                />
+                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10">
+                                  <PlayCircle className="h-6 w-6 text-white drop-shadow" />
+                                </div>
                               </>
                             )
                           ) : (
-                            <span className="flex h-full w-full items-center justify-center text-xs text-destructive">No file</span>
+                            <div className="flex h-full w-full items-center justify-center text-[10px] text-muted">
+                              No file
+                            </div>
                           )}
                         </button>
-                        <div className="px-2.5 py-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                            {asset.type === "image" ? "Image · Post format" : "Video · Reel format"}
-                          </p>
-                          <p className="truncate text-xs text-foreground">{asset.label.trim() || "No caption"}</p>
-                        </div>
                       </li>
                     ))}
                   </ul>
                   {invalidAssets && (
                     <p className="mt-2 text-xs font-medium text-destructive">
-                      Upload a file for every sample before publishing.
+                      Upload is required for image/video assets before publishing.
                     </p>
                   )}
-                </>
+                </div>
               )}
             </ReviewCard>
 
@@ -537,78 +408,22 @@ export function CampaignReviewPage() {
               onClick: goBack,
               buttonProps: { size: "sm", variant: "outline" },
             }}
-            rightActions={locked ? [] : reviewingSubmission ? [
+            rightActions={[
               {
-                id: "reject",
-                label: "Send back",
-                onClick: () => setRejectOpen(true),
-                icon: <Undo2 className="h-4 w-4" />,
-                buttonProps: { size: "sm", variant: "outline", disabled: saving },
-              },
-              ...(dirty
-                ? [{
-                    id: "save-live",
-                    label: "Save changes",
-                    onClick: requestSaveLiveChanges,
-                    buttonProps: { size: "sm" as const, variant: "outline" as const, disabled: !budgetValid },
-                  }]
-                : []),
-              {
-                id: "approve",
-                label: saving ? "Approving..." : "Approve & go live",
+                id: "publish",
+                label: saving ? "Publishing..." : "Publish Campaign",
                 onClick: () => void onPublish(),
-                icon: !saving ? <ShieldCheck className="h-4 w-4" /> : undefined,
+                icon: !saving ? <Rocket className="h-4 w-4" /> : undefined,
                 buttonProps: {
                   size: "sm",
                   variant: "success",
-                  // Edits must be saved (or discarded) before approving.
-                  disabled: saving || !readyToPublish || dirty,
+                  disabled: saving || !readyToPublish,
                 },
               },
-            ] : [
-              autoSave
-                ? {
-                    id: "publish",
-                    label: isAdmin
-                      ? saving ? "Publishing..." : "Publish Campaign"
-                      : saving ? "Submitting..." : "Submit for approval",
-                    onClick: () => void onPublish(),
-                    icon: !saving ? (isAdmin ? <Rocket className="h-4 w-4" /> : <Send className="h-4 w-4" />) : undefined,
-                    buttonProps: {
-                      size: "sm",
-                      variant: "success",
-                      disabled: saving || !readyToPublish,
-                    },
-                  }
-                : {
-                    // Already live/paused/closed: nothing to publish — edits are
-                    // saved explicitly, after a confirm, since creators see them.
-                    id: "save-live",
-                    label: dirty ? "Save changes" : "No unsaved changes",
-                    onClick: requestSaveLiveChanges,
-                    buttonProps: {
-                      size: "sm",
-                      variant: "success",
-                      disabled: !dirty || !budgetValid,
-                    },
-                  },
             ]}
           />
         </div>
       </WizardPage>
-      {draft.campaignId && (
-        <RejectCampaignDialog
-          open={rejectOpen}
-          campaignId={draft.campaignId}
-          campaignTitle={draft.title}
-          onCancel={() => setRejectOpen(false)}
-          onRejected={() => {
-            setRejectOpen(false);
-            toast("Sent back to the brand with your reason.", "success");
-            navigate("/admin/campaigns?status=pending_review");
-          }}
-        />
-      )}
     </>
   );
 }
