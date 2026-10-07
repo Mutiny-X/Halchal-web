@@ -52,7 +52,7 @@ import { parseRulePoints } from "@/features/campaigns/lib/rule-points";
 import { getWizardEditPath } from "@/features/campaigns/lib/wizard-paths";
 import { CreatorProfileModal } from "@/features/creators/components/CreatorProfileModal";
 import { useSubmission } from "@/features/submissions/hooks/use-submissions";
-import { adminApi, portalApi, ApiError, type AutoReviewResult, type Campaign, type CampaignCreatorPayout, type UploadProgress } from "@/lib/api";
+import { adminApi, downloadBlob, portalApi, ApiError, type AutoReviewResult, type Campaign, type CampaignCreatorPayout, type UploadProgress } from "@/lib/api";
 import { formatInr } from "@/lib/format";
 import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
@@ -1116,6 +1116,24 @@ export function CampaignDetailPage() {
     onError: (err) => toast(err instanceof ApiError ? err.message : "Could not update intake", "error"),
   });
 
+  const fileSlug = (campaign?.title ?? "campaign").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "campaign";
+  const generateReportMutation = useMutation({
+    mutationFn: () => adminApi.generateCampaignReport(getToken()!, id!),
+    onSuccess: (blob) => {
+      downloadBlob(blob, `${fileSlug}-report.pdf`);
+      toast("Report downloaded");
+    },
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not generate the report", "error"),
+  });
+  const downloadLedgerMutation = useMutation({
+    mutationFn: () => adminApi.downloadCampaignLedger(getToken()!, id!),
+    onSuccess: (blob) => {
+      downloadBlob(blob, `${fileSlug}-ledger.csv`);
+      toast("Ledger downloaded");
+    },
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not download the ledger", "error"),
+  });
+
   if (isPending || !campaign) return <DetailPageSkeleton />;
 
   // A view-only team member can look at everything but change nothing.
@@ -1141,13 +1159,6 @@ export function CampaignDetailPage() {
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "Could not update campaign", "error");
     }
-  }
-
-  async function copyShareLink() {
-    if (!id) return;
-    const url = `${window.location.origin}/share/campaigns/${id}`;
-    await navigator.clipboard.writeText(url);
-    toast("Read-only campaign link copied");
   }
 
   async function toggleAutoReview() {
@@ -1246,10 +1257,29 @@ export function CampaignDetailPage() {
                     Resume
                   </Button>
                 )}
-                {campaign.status !== "draft" && campaign.status !== "pending_review" && (
-                  <Button size="sm" variant="outline" onClick={() => void copyShareLink()}>
-                    Share
-                  </Button>
+                {/* What a brand gets instead of a share link: the report (PDF)
+                    and the per-reel ledger (CSV). Admin-only on the API. */}
+                {isAdmin && campaign.status !== "draft" && campaign.status !== "pending_review" && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={generateReportMutation.isPending}
+                      onClick={() => generateReportMutation.mutate()}
+                      title="Generate a detailed performance report (PDF) for this campaign"
+                    >
+                      {generateReportMutation.isPending ? "Generating…" : "Generate report"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={downloadLedgerMutation.isPending}
+                      onClick={() => downloadLedgerMutation.mutate()}
+                      title="Download a spreadsheet (CSV) with views, reach and engagement for every clip in this campaign"
+                    >
+                      {downloadLedgerMutation.isPending ? "Downloading…" : "Download ledger"}
+                    </Button>
+                  </>
                 )}
                 {isAdmin && (
                   <Button
