@@ -33,7 +33,6 @@ export type DeliverableForBoard = {
   paidAt?: string | null;
   workReviewedBy?: ReviewActor | null;
   proofReviewedBy?: ReviewActor | null;
-  paidBy?: ReviewActor | null;
 };
 
 /** Who made a decision on a clip. */
@@ -44,7 +43,6 @@ const STEP_VERB: Record<string, string> = {
   work_rejected: "Work rejected",
   proof_approved: "Proof of work approved",
   proof_rejected: "Proof of work rejected",
-  paid: "Marked as paid",
 };
 
 /** "Asha (team)" / "Priya (admin)". */

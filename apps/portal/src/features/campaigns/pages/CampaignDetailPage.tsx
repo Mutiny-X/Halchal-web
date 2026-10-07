@@ -626,7 +626,7 @@ function SubmissionDetailModal({
                         <span
                           className={cn(
                             "mt-1 h-2 w-2 shrink-0 rounded-full",
-                            entry.step.endsWith("rejected") ? "bg-red-400" : entry.step === "paid" ? "bg-emerald-400" : "bg-primary",
+                            entry.step.endsWith("rejected") ? "bg-red-400" : "bg-emerald-400",
                           )}
                         />
                         <div className="min-w-0">

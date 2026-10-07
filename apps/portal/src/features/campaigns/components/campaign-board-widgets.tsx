@@ -208,9 +208,8 @@ export function stageActor(d: DeliverableForBoard, stage: Stage): ReviewActor | 
     case "proof_rejected":
     case "awaiting_payment":
     case "proof_approved":
-      return d.proofReviewedBy ?? null;
     case "paid":
-      return d.paidBy ?? d.proofReviewedBy ?? null;
+      return d.proofReviewedBy ?? null;
     default:
       return null;
   }
@@ -475,7 +474,7 @@ export function ClipperProfileModal({
                       at={d.proofReviewedAt}
                       by={d.proofReviewedBy}
                     />
-                    <TimelineRow label="Paid" at={d.paidAt} by={d.paidBy} />
+                    <TimelineRow label="Paid" at={d.paidAt} />
                   </div>
                   {onOpen && (hasWork || hasProof) && (
                     <div className="mt-3 flex gap-2">
@@ -653,12 +652,7 @@ export function SubmissionCard({
             </span>
           </div>
         )}
-        {section === "proof" && d.paidAt && d.paidBy && (
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="shrink-0 text-muted">Paid by</span>
-            <span className="truncate font-semibold">{actorLabel(d.paidBy)}</span>
-          </div>
-        )}
+
         {section === "proof" && (
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted">Views · earning</span>
