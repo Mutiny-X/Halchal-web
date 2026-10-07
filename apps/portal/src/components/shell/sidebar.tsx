@@ -10,6 +10,7 @@ import {
   portalSidebarLabel,
 } from "@/components/shell/nav-config";
 import { adminApi } from "@/lib/api";
+import { dashboardPathForRole } from "@/lib/portal";
 import { cn } from "@/lib/utils";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 
@@ -62,7 +63,7 @@ export function Sidebar({
         <div className="flex shrink-0 items-start justify-between px-4 pt-6 pb-3">
           <div>
             <Link
-              to={role === "admin" ? "/admin/dashboard" : "/dashboard"}
+              to={dashboardPathForRole(role)}
               onClick={onClose}
               className="font-display text-xl font-extrabold tracking-tight text-primary"
             >

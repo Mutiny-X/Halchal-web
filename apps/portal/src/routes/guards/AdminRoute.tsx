@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from "react-router-dom";
 
+import { dashboardPathForRole } from "@/lib/portal";
 import { useAuth } from "@/providers/auth-provider";
 
 export function AdminRoute() {
@@ -12,7 +13,7 @@ export function AdminRoute() {
   }
 
   if (auth.user.role !== "admin") {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={dashboardPathForRole(auth.user.role)} replace />;
   }
 
   return <Outlet />;

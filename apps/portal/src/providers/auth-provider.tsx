@@ -31,13 +31,6 @@ type AuthContextValue = {
     portal: Portal,
     redirectTo?: string,
   ) => Promise<void>;
-  register: (data: {
-    email: string;
-    password: string;
-    companyName: string;
-    displayName?: string;
-    acceptTerms: true;
-  }) => Promise<void>;
   logout: (redirectTo?: string) => void;
   setSession: (session: AuthResponse) => void;
   getToken: () => string | null;
@@ -51,7 +44,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    setAuth(getStoredAuth());
+    const stored = getStoredAuth();
+    // A brand session saved before brand sign-in was closed — drop it
+    // rather than opening pages the API will refuse.
+    if (stored?.user.role === "brand") {
+      clearStoredAuth();
+      setAuth(null);
+    } else {
+      setAuth(stored);
+    }
     setIsLoading(false);
   }, []);
 
@@ -91,21 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [persist, navigate],
   );
 
-  const register = useCallback(
-    async (data: {
-      email: string;
-      password: string;
-      companyName: string;
-      displayName?: string;
-      acceptTerms: true;
-    }) => {
-      const res = await authApi.register(data);
-      persist(res);
-      navigate("/dashboard", { replace: true });
-    },
-    [persist, navigate],
-  );
-
   const logout = useCallback(
     (redirectTo?: string) => {
       const refresh = auth?.tokens.refreshToken;
@@ -131,12 +117,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       auth,
       isLoading,
       login,
-      register,
       logout,
       setSession: persist,
       getToken: () => auth?.tokens.accessToken ?? null,
     }),
-    [auth, isLoading, login, register, logout, persist],
+    [auth, isLoading, login, logout, persist],
   );
 
   return (

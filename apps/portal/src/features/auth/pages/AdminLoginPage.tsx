@@ -18,7 +18,9 @@ import { useAuth } from "@/providers/auth-provider";
 
 export function AdminLoginPage() {
   const [searchParams] = useSearchParams();
-  const redirectTo = safeRedirectPath(searchParams.get("next"));
+  // Only an explicit ?next= overrides the user's own home page.
+  const next = searchParams.get("next");
+  const redirectTo = next ? safeRedirectPath(next) : undefined;
   const { login } = useAuth();
   const { toast } = useToast();
   const [email, setEmail] = useState("");
@@ -74,9 +76,9 @@ export function AdminLoginPage() {
         </AuthPrimaryButton>
       </form>
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        Brand account?{" "}
+        Team member?{" "}
         <Link to="/login" className="font-medium text-primary hover:underline">
-          Brand login
+          Team sign in
         </Link>
       </p>
     </AuthSplitLayout>

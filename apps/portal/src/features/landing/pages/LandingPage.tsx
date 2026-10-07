@@ -90,14 +90,14 @@ function Nav() {
           ) : (
             <>
               <Link to="/login" className="text-sm font-medium text-white/70 transition-colors hover:text-white">
-                Sign in
+                Team sign in
               </Link>
               <Magnetic>
                 <Link
-                  to="/signup"
+                  to="/support"
                   className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary/90"
                 >
-                  Get started free <ArrowRight className="h-3.5 w-3.5" />
+                  Talk to us <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               </Magnetic>
             </>
@@ -139,12 +139,12 @@ function Nav() {
                 </Link>
               ) : (
                 <>
-                  <Link to="/login" className="text-center text-sm text-white/70">Sign in</Link>
+                  <Link to="/login" className="text-center text-sm text-white/70">Team sign in</Link>
                   <Link
-                    to="/signup"
+                    to="/support"
                     className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
                   >
-                    Get started free
+                    Talk to us
                   </Link>
                 </>
               )}
@@ -200,7 +200,7 @@ function Hero() {
           <motion.div variants={fadeUp} className="mb-12 flex flex-col items-start gap-4 sm:flex-row sm:items-center">
             <Magnetic>
               <Link
-                to="/signup"
+                to="/support"
                 className="group flex items-center gap-2 rounded-2xl bg-primary px-8 py-4 text-base font-bold text-white shadow-[0_0_40px_rgba(99,14,212,0.5)] transition hover:bg-primary/90 hover:shadow-[0_0_60px_rgba(99,14,212,0.6)]"
               >
                 Launch a campaign
@@ -336,7 +336,7 @@ function ForClippers() {
 
               <Magnetic className="inline-block">
                 <Link
-                  to="/signup"
+                  to="/support"
                   className="inline-flex items-center gap-2 rounded-2xl bg-white px-6 py-3 text-sm font-bold text-[#07091A] transition hover:bg-white/90"
                 >
                   Join as a clipper <ArrowRight className="h-4 w-4" />
@@ -457,15 +457,15 @@ function FinalCta() {
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <Magnetic>
                 <Link
-                  to="/signup"
+                  to="/support"
                   className="group flex items-center gap-2 rounded-2xl bg-primary px-8 py-4 text-base font-bold text-white shadow-[0_0_30px_rgba(99,14,212,0.4)] transition hover:bg-primary/90"
                 >
-                  Create your free account
+                  Talk to our team
                   <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
                 </Link>
               </Magnetic>
               <Link to="/login" className="text-sm text-white/50 transition-colors hover:text-white">
-                Already have an account? Sign in
+                Halchal team? Sign in
               </Link>
             </div>
           </div>
@@ -496,10 +496,10 @@ function Footer() {
             <p className="mb-4 text-xs font-bold uppercase tracking-widest text-white/40">Platform</p>
             <ul className="space-y-3">
               {[
-                { label: "For brands", to: "/signup" },
-                { label: "For clippers", to: "/signup" },
+                { label: "For brands", to: "/support" },
+                { label: "For clippers", to: "/support" },
                 { label: "Pricing", to: "#pricing" },
-                { label: "Sign in", to: "/login" },
+                { label: "Team sign in", to: "/login" },
               ].map((l) => (
                 <li key={l.label}>
                   <Link to={l.to} className="text-sm text-white/50 transition-colors hover:text-white">
