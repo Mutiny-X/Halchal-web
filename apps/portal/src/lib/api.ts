@@ -569,6 +569,13 @@ export type DeliverableListItem = {
   status: string;
   draftDriveUrl: string | null;
   draftSubmittedAt: string | null;
+  draftReviewedAt: string | null;
+  livePostUrl: string | null;
+  liveSubmittedAt: string | null;
+  proofReviewedAt: string | null;
+  /** The latest rejection's reason — for the step the status says was rejected. */
+  rejectionReason: string | null;
+  paidAt: string | null;
   campaignId: string;
   campaignTitle: string;
   participationId: string;
@@ -1304,6 +1311,10 @@ export type CampaignPayoutDeliverable = {
 
 export type CampaignCreatorPayout = {
   creatorId: string;
+  /** One payout row per profile — a creator's two profiles are two rows. */
+  creatorProfileId: string;
+  handle: string;
+  platform: string;
   creatorName: string;
   deliverables: CampaignPayoutDeliverable[];
   totalApprovedPaise: number;
@@ -1640,11 +1651,14 @@ export const adminApi = {
       accessToken: token,
     }),
 
-  payoutCreator: (token: string, campaignId: string, creatorId: string) =>
-    apiFetch<PayoutResult>(`/admin/campaigns/${campaignId}/payouts/creator/${creatorId}`, {
-      method: "POST",
-      accessToken: token,
-    }),
+  payoutCreator: (token: string, campaignId: string, creatorId: string, creatorProfileId: string) =>
+    apiFetch<PayoutResult>(
+      `/admin/campaigns/${campaignId}/payouts/creator/${creatorId}?creatorProfileId=${encodeURIComponent(creatorProfileId)}`,
+      {
+        method: "POST",
+        accessToken: token,
+      },
+    ),
 
   // Pool / intake overrides
   creatorInstagramInsights: (token: string, creatorId: string, connectionId: string, refresh = false) =>

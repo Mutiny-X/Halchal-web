@@ -2,22 +2,34 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { StatusPill } from "@/components/ui/status-pill";
 import {
   ClipperProfileGrid,
   ClipperProfileModal,
   Leaderboard,
   MediaPreview,
+  StageTag,
   StatusBoard,
   SubmissionGrid,
+  useEscape,
+  type ReviewSection,
 } from "@/features/campaigns/components/campaign-board-widgets";
 import {
+  approvedEarningsPaise,
   buildClipperProfiles,
   buildCreatorPerformance,
   formatCount,
   formatDate,
-  type ClipperProfile,
 } from "@/features/campaigns/lib/campaign-board-data";
+import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
+import {
+  countBy,
+  deliverableStage,
+  isProofStatus,
+  proofOutcome,
+  STAGE_ORDER,
+  TAG_META,
+  workOutcome,
+} from "@/features/campaigns/lib/clipper-stage";
 import { formatPlatformLabel } from "@/features/campaigns/lib/platform-labels";
 import { parseRulePoints } from "@/features/campaigns/lib/rule-points";
 import { formatInr } from "@/lib/format";
@@ -48,17 +60,32 @@ function ReadOnlySubmissionModal({
   onClose,
 }: {
   deliverable: PublicDeliverableListItem;
-  section: "submissions" | "proof";
+  section: ReviewSection;
   onClose: () => void;
 }) {
+  useEscape(onClose);
   const url = section === "submissions" ? deliverable.draftDriveUrl : deliverable.livePostUrl;
+  const tag = section === "submissions" ? workOutcome(deliverable) : proofOutcome(deliverable);
+  // The reason belongs to whichever step was rejected last.
+  const rejectionHere =
+    (section === "submissions" && deliverable.status === "draft_rejected") ||
+    (section === "proof" && deliverable.status === "proof_rejected")
+      ? deliverable.rejectionReason
+      : null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+      >
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h2 className="font-bold text-lg">{deliverable.creatorName}</h2>
-            <StatusPill status={deliverable.status} />
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h2 className="truncate text-lg font-bold">
+              {deliverable.creatorName} · {section === "submissions" ? "Work" : "Proof of work"}
+            </h2>
+            {tag && <StageTag tag={tag} />}
           </div>
           <button onClick={onClose} className="rounded-lg p-1 text-muted hover:bg-surface-variant hover:text-foreground">
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -70,21 +97,23 @@ function ReadOnlySubmissionModal({
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
           <div className="flex items-center justify-between text-xs text-muted">
             <span>{formatPlatformLabel(deliverable.platform)}</span>
-            <span>{deliverable.draftSubmittedAt ? `Submitted ${formatDate(deliverable.draftSubmittedAt)}` : "Not submitted yet"}</span>
+            {section === "submissions" && (
+              <span>{deliverable.draftSubmittedAt ? `Submitted ${formatDate(deliverable.draftSubmittedAt)}` : "Not submitted yet"}</span>
+            )}
           </div>
 
           {url ? (
-            <MediaPreview label={section === "submissions" ? "Draft" : "Live post"} url={url} />
+            <MediaPreview label={section === "submissions" ? "Submitted work" : "Live post"} url={url} />
           ) : (
             <div className="flex items-center justify-center rounded-xl border border-dashed border-border py-10 text-sm text-muted">
               Nothing submitted yet
             </div>
           )}
 
-          {deliverable.rejectionReason && (
+          {rejectionHere && (
             <div className="rounded-xl bg-surface-variant/50 p-4">
-              <p className="text-sm font-semibold">Rejection reason</p>
-              <p className="mt-1.5 text-sm text-muted">{deliverable.rejectionReason}</p>
+              <p className="text-sm font-semibold">Why it was rejected</p>
+              <p className="mt-1.5 text-sm text-muted">{rejectionHere}</p>
             </div>
           )}
         </div>
@@ -96,8 +125,8 @@ function ReadOnlySubmissionModal({
 export function PublicCampaignPage() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>("overview");
-  const [selectedClipper, setSelectedClipper] = useState<ClipperProfile | null>(null);
-  const [selectedSubmission, setSelectedSubmission] = useState<{ item: PublicDeliverableListItem; section: "submissions" | "proof" } | null>(null);
+  const [selectedClipperId, setSelectedClipperId] = useState<string | null>(null);
+  const [selectedSubmission, setSelectedSubmission] = useState<{ item: PublicDeliverableListItem; section: ReviewSection } | null>(null);
 
   const { data: campaign, isPending, isError } = useQuery({
     queryKey: ["public-campaign", id],
@@ -133,20 +162,20 @@ export function PublicCampaignPage() {
   const avoidPoints = parseRulePoints(campaign.avoidRules ?? "");
 
   const clippers = buildClipperProfiles(deliverables);
-  const workSubmissions = deliverables.filter((d) => d.status !== "draft_pending");
-  const proofSubmissions = deliverables.filter((d) =>
-    ["live_submitted", "proof_under_review", "proof_approved", "proof_rejected"].includes(d.status),
-  );
-  const reviews = deliverables.filter((d) => d.status === "under_review");
-  const approved = deliverables.filter((d) => ["draft_approved", "proof_approved"].includes(d.status));
-  const totalClippers = new Set(deliverables.map((d) => d.participationId)).size;
+  const selectedClipper = clippers.find((c) => c.participationId === selectedClipperId) ?? null;
+  const stageCounts = countBy(deliverables, (d) => deliverableStage(d));
+  const totalClippers = clippers.length;
+  const openSubmission = (deliverableId: string, section: ReviewSection) => {
+    const item = deliverables.find((d) => d.id === deliverableId);
+    if (item) setSelectedSubmission({ item, section });
+  };
 
   const creatorPerformance = buildCreatorPerformance(deliverables);
   const totalViews = deliverables.reduce((sum, d) => sum + d.viewCount, 0);
   const totalLikes = deliverables.reduce((sum, d) => sum + d.likeCount, 0);
   const totalComments = deliverables.reduce((sum, d) => sum + d.commentCount, 0);
   const totalShares = deliverables.reduce((sum, d) => sum + d.shareCount, 0);
-  const totalEarningsPaise = deliverables.reduce((sum, d) => sum + d.estimatedPaise, 0);
+  const totalEarningsPaise = deliverables.reduce((sum, d) => sum + approvedEarningsPaise(d), 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -169,7 +198,7 @@ export function PublicCampaignPage() {
           <div className="p-6">
             <div className="flex flex-wrap items-center gap-2">
               <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>
-                {campaign.status}
+                {campaignStatusLabel(campaign.status)}
               </span>
               {campaign.platforms.map((p) => (
                 <span key={p} className="rounded-full bg-surface-variant px-2 py-0.5 text-[10px] text-muted">
@@ -302,32 +331,33 @@ export function PublicCampaignPage() {
         )}
 
         {/* Working Clippers */}
-        {tab === "clippers" && <ClipperProfileGrid items={clippers} onSelect={setSelectedClipper} />}
+        {tab === "clippers" && <ClipperProfileGrid items={clippers} onSelect={(c) => setSelectedClipperId(c.participationId)} />}
 
         {/* Status Board */}
-        {tab === "board" && <StatusBoard deliverables={deliverables} />}
+        {tab === "board" && (
+          <StatusBoard
+            deliverables={deliverables}
+            onOpen={(d) => openSubmission(d.id, isProofStatus(d.status) ? "proof" : "submissions")}
+          />
+        )}
 
         {/* Work Submissions */}
         {tab === "submissions" && (
           <SubmissionGrid
-            items={workSubmissions}
-            onSelect={(id) => {
-              const item = deliverables.find((d) => d.id === id);
-              if (item) setSelectedSubmission({ item, section: "submissions" });
-            }}
-            emptyMessage="No work submissions yet."
+            items={deliverables}
+            section="submissions"
+            onSelect={(deliverableId) => openSubmission(deliverableId, "submissions")}
+            emptyMessage="No work submitted yet."
           />
         )}
 
         {/* Proof of Work */}
         {tab === "proof" && (
           <SubmissionGrid
-            items={proofSubmissions}
-            onSelect={(id) => {
-              const item = deliverables.find((d) => d.id === id);
-              if (item) setSelectedSubmission({ item, section: "proof" });
-            }}
-            emptyMessage="No proof submissions yet."
+            items={deliverables}
+            section="proof"
+            onSelect={(deliverableId) => openSubmission(deliverableId, "proof")}
+            emptyMessage="No proof of work submitted yet."
           />
         )}
 
@@ -342,7 +372,7 @@ export function PublicCampaignPage() {
                   { label: "Total Likes",    value: formatCount(totalLikes) },
                   { label: "Total Comments", value: formatCount(totalComments) },
                   { label: "Total Shares",   value: formatCount(totalShares) },
-                  { label: "Total Earnings", value: formatInr(totalEarningsPaise) },
+                  { label: "Earned (approved proof)", value: formatInr(totalEarningsPaise) },
                 ].map(({ label, value }) => (
                   <div key={label} className="rounded-2xl border border-border bg-surface p-5 text-center">
                     <p className="text-2xl font-black">{value}</p>
@@ -358,13 +388,13 @@ export function PublicCampaignPage() {
             </div>
 
             <div className="rounded-2xl border border-border bg-surface p-5">
-              <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">Pipeline Breakdown</p>
+              <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">Pipeline</p>
               <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
                 {[
-                  { label: "Total Clippers", value: String(totalClippers) },
-                  { label: "In Review",      value: String(reviews.length) },
-                  { label: "Proof Pending",  value: String(proofSubmissions.length) },
-                  { label: "Approved",       value: String(approved.length) },
+                  { label: "Clippers", value: totalClippers },
+                  { label: "Work in review", value: stageCounts.work_review ?? 0 },
+                  { label: "Proof in review", value: stageCounts.proof_review ?? 0 },
+                  { label: "Proof approved", value: stageCounts.proof_approved ?? 0 },
                 ].map(({ label, value }) => (
                   <div key={label} className="rounded-xl border border-border bg-surface-variant/30 p-4 text-center">
                     <p className="text-xl font-black">{value}</p>
@@ -372,21 +402,13 @@ export function PublicCampaignPage() {
                   </div>
                 ))}
               </div>
-              {[
-                { label: "Draft Pending",      count: deliverables.filter((d) => d.status === "draft_pending").length,      color: "bg-zinc-400" },
-                { label: "Under Review",       count: deliverables.filter((d) => d.status === "under_review").length,       color: "bg-yellow-400" },
-                { label: "Draft Approved",     count: deliverables.filter((d) => d.status === "draft_approved").length,     color: "bg-blue-400" },
-                { label: "Live Submitted",     count: deliverables.filter((d) => d.status === "live_submitted").length,     color: "bg-orange-400" },
-                { label: "Proof Under Review", count: deliverables.filter((d) => d.status === "proof_under_review").length, color: "bg-orange-400" },
-                { label: "Proof Approved",     count: deliverables.filter((d) => d.status === "proof_approved").length,     color: "bg-emerald-400" },
-                { label: "Rejected",           count: deliverables.filter((d) => ["draft_rejected", "proof_rejected"].includes(d.status)).length, color: "bg-red-400" },
-              ].map(({ label, count, color }) => (
-                <div key={label} className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
+              {STAGE_ORDER.filter((st) => st !== "awaiting_payment" && st !== "paid").map((stage) => (
+                <div key={stage} className="flex items-center justify-between border-b border-border/40 py-2.5 last:border-0">
                   <div className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${color}`} />
-                    <span className="text-sm">{label}</span>
+                    <span className={`h-2 w-2 rounded-full ${TAG_META[stage].dot}`} />
+                    <span className="text-sm">{TAG_META[stage].label}</span>
                   </div>
-                  <span className="text-sm font-semibold">{count}</span>
+                  <span className="text-sm font-semibold">{stageCounts[stage] ?? 0}</span>
                 </div>
               ))}
             </div>
@@ -394,8 +416,12 @@ export function PublicCampaignPage() {
         )}
       </div>
 
-      {selectedClipper && (
-        <ClipperProfileModal clipper={selectedClipper} onClose={() => setSelectedClipper(null)} />
+      {selectedClipper && !selectedSubmission && (
+        <ClipperProfileModal
+          clipper={selectedClipper}
+          onClose={() => setSelectedClipperId(null)}
+          onOpen={openSubmission}
+        />
       )}
 
       {selectedSubmission && (
