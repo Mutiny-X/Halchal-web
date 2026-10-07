@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Globe2,
   Lightbulb,
+  Lock,
   MapPin,
   Upload,
 } from "lucide-react";
@@ -22,7 +23,7 @@ import {
 import { StateMultiSelect } from "@/features/campaigns/components/state-multi-select";
 import { WizardStepper } from "@/features/campaigns/components/wizard-stepper";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
-import { PLATFORM_OPTIONS } from "@/features/campaigns/lib/platform-options";
+import { isPlatformLocked, PLATFORM_OPTIONS } from "@/features/campaigns/lib/platform-options";
 import { normalizeUploadUrl, resolveMediaUrl } from "@/lib/media-url";
 import { adminApi, ApiError, brandApi } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
@@ -123,7 +124,10 @@ export function CampaignNewBasicsPage() {
 
   const isDraftCampaign = draft.status === "draft";
   const startDateError = isDraftCampaign ? startDateProblem(draft.startDate) : null;
-  const hasPlatform = draft.platforms.length > 0;
+  // A draft saved with a platform that's since been locked must pick again;
+  // campaigns already published keep theirs.
+  const hasPlatform =
+    draft.platforms.length > 0 && !(isDraftCampaign && draft.platforms.some(isPlatformLocked));
   const hasValidLocation =
     draft.locationType === "pan_india" || draft.targetStates.length > 0;
 
@@ -325,20 +329,32 @@ export function CampaignNewBasicsPage() {
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   {PLATFORM_OPTIONS.map(({ value, label, icon: Icon, badge }) => {
                     const isSelected = selectedPlatform === value;
+                    const locked = isPlatformLocked(value);
                     return (
                       <button
                         key={value}
                         type="button"
                         role="radio"
                         aria-checked={isSelected}
+                        aria-disabled={locked}
+                        disabled={locked}
+                        title={locked ? `${label} isn't available yet` : undefined}
                         onClick={() => update({ platforms: [value] })}
                         className={cn(
                           "relative flex flex-col items-center gap-2 rounded-2xl border bg-surface px-3 py-4 transition",
-                          isSelected
-                            ? "border-primary shadow-[0_0_16px_rgba(99,14,212,0.28)] ring-2 ring-primary/25"
-                            : "border-border hover:border-foreground/20",
+                          locked
+                            ? "cursor-not-allowed border-border opacity-50 grayscale"
+                            : isSelected
+                              ? "border-primary shadow-[0_0_16px_rgba(99,14,212,0.28)] ring-2 ring-primary/25"
+                              : "border-border hover:border-foreground/20",
                         )}
                       >
+                        {locked && (
+                          <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-surface-variant px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                            <Lock className="h-2.5 w-2.5" />
+                            Coming soon
+                          </span>
+                        )}
                         {isSelected && (
                           <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
                             <Check className="h-3 w-3" strokeWidth={3} />
