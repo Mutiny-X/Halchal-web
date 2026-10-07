@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -507,27 +507,6 @@ export function CampaignReviewPage() {
               />
             )}
 
-            {isAdmin && draft.campaignId && !draft.brandProfileId && (
-              <div className="rounded-2xl border border-border bg-surface p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Brand collaboration</p>
-                    <p className="mt-0.5 text-xs text-muted">
-                      {draft.inviteAcceptedAt
-                        ? "A brand has accepted the invite."
-                        : "Optionally invite a brand to collaborate before publishing."}
-                    </p>
-                  </div>
-                  <Link
-                    to={`/admin/campaigns/${draft.campaignId}/invite`}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    {draft.inviteAcceptedAt ? "Manage invite" : "Invite brand"}
-                  </Link>
-                </div>
-              </div>
-            )}
           </div>
 
           <CampaignWizardFooter

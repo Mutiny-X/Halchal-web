@@ -5,7 +5,6 @@ import {
   Building2,
   CheckSquare,
   CircleHelp,
-  CreditCard,
   LayoutDashboard,
   LifeBuoy,
   Megaphone,
@@ -31,23 +30,6 @@ export type PortalNavItem = {
   /** Only rendered for Super Admins, regardless of the section matrix. */
   superAdminOnly?: boolean;
 };
-
-const brandNavItems: PortalNavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  {
-    href: "/campaigns",
-    label: "Campaigns",
-    icon: Megaphone,
-    matchNested: true,
-  },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/billing", label: "Billing", icon: CreditCard },
-  {
-    href: "/settings/brand",
-    label: "Settings",
-    icon: Settings,
-  },
-];
 
 const adminNavItems: PortalNavItem[] = [
   { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, section: "dashboard" },
@@ -84,7 +66,8 @@ const staffNavItems: PortalNavItem[] = [
 export function getNavForRole(role: Portal): PortalNavItem[] {
   if (role === "admin") return adminNavItems;
   if (role === "staff") return staffNavItems;
-  return brandNavItems;
+  // Brands don't sign in to the website.
+  return [];
 }
 
 /** Applies a restricted admin's effective permissions to the nav list.

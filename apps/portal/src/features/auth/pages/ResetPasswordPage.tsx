@@ -57,7 +57,7 @@ export function ResetPasswordPage() {
       <AuthMobileBrandMark />
       <AuthPageHeader
         title="Choose a new password"
-        description="Enter a new password for your brand account."
+        description="Choose a new password for your Halchal account."
       />
       <form onSubmit={onSubmit} className={authFormClass}>
         <AuthPasswordField

@@ -15,5 +15,6 @@ export function portalFromRole(role: string | undefined | null): Portal {
 export function dashboardPathForRole(role: string | undefined | null): string {
   if (role === "admin") return "/admin/dashboard";
   if (role === "staff") return "/staff/brands";
-  return "/dashboard";
+  // Brands have no pages of their own any more.
+  return "/login";
 }

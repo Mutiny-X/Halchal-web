@@ -44,7 +44,7 @@ export function ForgotPasswordPage() {
       <AuthMobileBrandMark />
       <AuthPageHeader
         title="Reset password"
-        description="Enter your brand account email and we'll send reset instructions."
+        description="Enter your team account email and we'll send reset instructions."
       />
       <form onSubmit={onSubmit} className={authFormClass}>
         <AuthTextField

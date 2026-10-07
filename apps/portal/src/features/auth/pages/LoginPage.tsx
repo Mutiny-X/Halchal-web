@@ -2,12 +2,10 @@ import { ArrowRight, Mail } from "lucide-react";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { AuthDivider } from "@/components/auth/auth-divider";
 import { AuthPasswordField } from "@/components/auth/auth-password-field";
 import { AuthPrimaryButton } from "@/components/auth/auth-primary-button";
 import { authFormClass } from "@/components/auth/auth-styles";
 import { AuthTextField } from "@/components/auth/auth-text-field";
-import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
 import {
   AuthMobileBrandMark,
   AuthPageHeader,
@@ -22,7 +20,9 @@ import { useAuth } from "@/providers/auth-provider";
 
 export function LoginPage() {
   const [searchParams] = useSearchParams();
-  const redirectTo = safeRedirectPath(searchParams.get("next"));
+  // Only an explicit ?next= overrides the user's own home page.
+  const next = searchParams.get("next");
+  const redirectTo = next ? safeRedirectPath(next) : undefined;
   const { login } = useAuth();
   const { toast } = useToast();
   const [email, setEmail] = useState("");
@@ -53,17 +53,13 @@ export function LoginPage() {
     }
   }
 
-  function onGoogleSignIn() {
-    toast("Google sign-in is coming soon.", "error");
-  }
-
   return (
     <AuthSplitLayout heroVariant="login" footer={<AuthTrustBadges />}>
       <AuthMobileBrandMark />
 
       <AuthPageHeader
-        title="Welcome back"
-        description="Sign in to manage campaigns, review clipper submissions, and track verified views."
+        title="Team sign in"
+        description="For the Halchal team. Admins are taken to the admin portal automatically."
       />
 
       <form onSubmit={onSubmit} className={authFormClass}>
@@ -105,9 +101,6 @@ export function LoginPage() {
           Sign in
         </AuthPrimaryButton>
       </form>
-
-      <AuthDivider label="or" />
-      <GoogleSignInButton onClick={onGoogleSignIn} />
     </AuthSplitLayout>
   );
 }

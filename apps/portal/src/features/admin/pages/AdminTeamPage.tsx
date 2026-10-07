@@ -42,6 +42,11 @@ function Field({ label, required, children }: { label: string; required?: boolea
   );
 }
 
+function unguessablePassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /* ── Create Team Member Modal ── */
 function CreateMemberModal({ onClose }: { onClose: () => void }) {
   const { getToken } = useAuth();
@@ -49,13 +54,15 @@ function CreateMemberModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
 
   const mutation = useMutation({
-    mutationFn: () => adminApi.createTeamMember(getToken()!, { name: name.trim(), email: email.trim(), password }),
+    // The member chooses their own password from the link in their welcome
+    // email; this random one only satisfies the API and is never shown.
+    mutationFn: () =>
+      adminApi.createTeamMember(getToken()!, { name: name.trim(), email: email.trim(), password: unguessablePassword() }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin-team-members"] });
-      toast("Team member created — login details emailed", "success");
+      toast("Team member added — they'll get an email to set their password", "success");
       onClose();
     },
     onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to create team member", "error"),
@@ -80,17 +87,17 @@ function CreateMemberModal({ onClose }: { onClose: () => void }) {
           <Field label="Email" required>
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="rahul@company.com" />
           </Field>
-          <Field label="Password" required>
-            <Input type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 characters" />
-          </Field>
-          <p className="text-xs text-muted">Login details will be sent to the member's email automatically.</p>
+          <p className="text-xs text-muted">
+            They'll get an email with a link to choose their own password (valid for 3 days). If it expires, they can use
+            "Forgot password?" on the sign-in page.
+          </p>
 
           <div className="flex gap-3 pt-1">
             <Button variant="outline" className="flex-1" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
             <Button
               className="flex-1"
               onClick={() => mutation.mutate()}
-              disabled={mutation.isPending || !name.trim() || !email.trim() || password.length < 8}
+              disabled={mutation.isPending || !name.trim() || !email.trim()}
             >
               {mutation.isPending ? "Saving…" : "Save Team Member"}
             </Button>

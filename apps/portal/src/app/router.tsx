@@ -14,10 +14,8 @@ import {
 import { AuthLayout } from "@/routes/AuthLayout";
 import { CampaignWizardLayout } from "@/routes/CampaignWizardLayout";
 import { AdminRoute } from "@/routes/guards/AdminRoute";
-import { BrandRoute } from "@/routes/guards/BrandRoute";
 import { GuestRoute } from "@/routes/guards/GuestRoute";
 import { ProtectedRoute } from "@/routes/guards/ProtectedRoute";
-import { RoleRoute } from "@/routes/guards/RoleRoute";
 import { StaffRoute } from "@/routes/guards/StaffRoute";
 import { PortalLayout } from "@/routes/PortalLayout";
 import { RootLayout } from "@/routes/RootLayout";
@@ -32,11 +30,6 @@ const AdminLoginPage = lazy(() =>
     default: m.AdminLoginPage,
   })),
 );
-const SignupPage = lazy(() =>
-  import("@/features/auth/pages/SignupPage").then((m) => ({
-    default: m.SignupPage,
-  })),
-);
 const ForgotPasswordPage = lazy(() =>
   import("@/features/auth/pages/ForgotPasswordPage").then((m) => ({
     default: m.ForgotPasswordPage,
@@ -48,11 +41,6 @@ const ResetPasswordPage = lazy(() =>
   })),
 );
 
-const DashboardPage = lazy(() =>
-  import("@/features/dashboard/pages/DashboardPage").then((m) => ({
-    default: m.DashboardPage,
-  })),
-);
 const AdminDashboardPage = lazy(() =>
   import("@/features/admin/pages/AdminDashboardPage").then((m) => ({
     default: m.AdminDashboardPage,
@@ -168,11 +156,6 @@ const CampaignReviewPage = lazy(() =>
     default: m.CampaignReviewPage,
   })),
 );
-const AdminCampaignInvitePage = lazy(() =>
-  import("@/features/admin/pages/AdminCampaignInvitePage").then((m) => ({
-    default: m.AdminCampaignInvitePage,
-  })),
-);
 const PublicCampaignPage = lazy(() =>
   import("@/features/campaigns/pages/PublicCampaignPage").then((m) => ({
     default: m.PublicCampaignPage,
@@ -182,21 +165,6 @@ const PublicCampaignPage = lazy(() =>
 const AnalyticsPage = lazy(() =>
   import("@/features/analytics/pages/AnalyticsPage").then((m) => ({
     default: m.AnalyticsPage,
-  })),
-);
-const BillingPage = lazy(() =>
-  import("@/features/billing/pages/BillingPage").then((m) => ({
-    default: m.BillingPage,
-  })),
-);
-const BrandSettingsPage = lazy(() =>
-  import("@/features/settings/pages/BrandSettingsPage").then((m) => ({
-    default: m.BrandSettingsPage,
-  })),
-);
-const AcceptCampaignInvitePage = lazy(() =>
-  import("@/features/invite/pages/AcceptCampaignInvitePage").then((m) => ({
-    default: m.AcceptCampaignInvitePage,
   })),
 );
 
@@ -285,20 +253,12 @@ export const router = createBrowserRouter([
                 element: withSuspense(null, <AdminLoginPage />),
               },
               {
-                path: "signup",
-                element: withSuspense(null, <SignupPage />),
-              },
-              {
                 path: "forgot-password",
                 element: withSuspense(null, <ForgotPasswordPage />),
               },
               {
                 path: "reset-password",
                 element: withSuspense(null, <ResetPasswordPage />),
-              },
-              {
-                path: "invite/campaign",
-                element: withSuspense(null, <AcceptCampaignInvitePage />),
               },
             ],
           },
@@ -307,43 +267,6 @@ export const router = createBrowserRouter([
       {
         element: <ProtectedRoute />,
         children: [
-          // Brand-only pages
-          {
-            element: <BrandRoute />,
-            children: [
-              {
-                element: <PortalLayout />,
-                children: [
-                  {
-                    path: "dashboard",
-                    element: withSuspense(<PortalShellSkeleton />, <DashboardPage />),
-                  },
-                  {
-                    path: "campaigns",
-                    element: withSuspense(<CampaignListSkeleton />, <CampaignsPage />),
-                  },
-                  {
-                    path: "analytics",
-                    element: withSuspense(<PortalShellSkeleton />, <AnalyticsPage />),
-                  },
-                  {
-                    element: <RoleRoute allowedRoles={["brand"]} />,
-                    children: [
-                      {
-                        path: "billing",
-                        element: withSuspense(<PortalShellSkeleton />, <BillingPage />),
-                      },
-                    ],
-                  },
-                  {
-                    path: "settings/brand",
-                    element: withSuspense(<PortalShellSkeleton />, <BrandSettingsPage />),
-                  },
-                ],
-              },
-            ],
-          },
-
           // Admin-only pages
           {
             element: <AdminRoute />,
@@ -407,10 +330,6 @@ export const router = createBrowserRouter([
                     })),
                   },
                   {
-                    path: "admin/campaigns/:id/invite",
-                    element: withSuspense(<PortalShellSkeleton />, <AdminCampaignInvitePage />),
-                  },
-                  {
                     path: "admin/campaigns/:id",
                     element: withSuspense(<DetailPageSkeleton />, <CampaignDetailPage />),
                   },
@@ -459,7 +378,7 @@ export const router = createBrowserRouter([
             ],
           },
 
-          // Shared pages — accessible by brand, staff, and admin
+          // Shared pages — admins and team members
           {
             element: <PortalLayout />,
             children: [
@@ -478,7 +397,9 @@ export const router = createBrowserRouter([
           },
         ],
       },
-      { path: "*", element: <Navigate to="/dashboard" replace /> },
+      // Old brand pages (/dashboard, /campaigns, /signup, …) land on sign-in,
+      // which sends a signed-in admin or team member to their own home.
+      { path: "*", element: <Navigate to="/login" replace /> },
     ],
   },
 ]);
