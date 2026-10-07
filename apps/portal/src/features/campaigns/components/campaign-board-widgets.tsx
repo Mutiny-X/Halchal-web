@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { CreatorProfileModal } from "@/features/creators/components/CreatorProfileModal";
 import {
+  actorLabel,
+  actorSentence,
   BOARD_COLUMNS,
   RANK_STYLE,
   formatCount,
@@ -10,6 +12,7 @@ import {
   type CreatorPerformance,
   type CreatorProfileSnippet,
   type DeliverableForBoard,
+  type ReviewActor,
 } from "@/features/campaigns/lib/campaign-board-data";
 import {
   countBy,
@@ -178,6 +181,11 @@ function BoardStageCard({
           </span>
         )}
       </div>
+      {stageActor(d, stage) && (
+        <p className="mt-1.5 truncate text-[11px] text-muted" title={actorSentence(stageActor(d, stage)!)}>
+          by {actorLabel(stageActor(d, stage)!)}
+        </p>
+      )}
       {canOpen && (
         <button
           type="button"
@@ -189,6 +197,23 @@ function BoardStageCard({
       )}
     </div>
   );
+}
+
+/** Who put a clip into the stage it's in now (nobody, while it waits on review). */
+export function stageActor(d: DeliverableForBoard, stage: Stage): ReviewActor | null {
+  switch (stage) {
+    case "work_rejected":
+    case "awaiting_proof":
+      return d.workReviewedBy ?? null;
+    case "proof_rejected":
+    case "awaiting_payment":
+    case "proof_approved":
+      return d.proofReviewedBy ?? null;
+    case "paid":
+      return d.paidBy ?? d.proofReviewedBy ?? null;
+    default:
+      return null;
+  }
 }
 
 function EmptyColumn() {
@@ -348,12 +373,15 @@ export function ClipperProfileGrid({ items, onSelect }: { items: ClipperProfile[
   );
 }
 
-function TimelineRow({ label, at }: { label: string; at: string | null | undefined }) {
+function TimelineRow({ label, at, by }: { label: string; at: string | null | undefined; by?: ReviewActor | null }) {
   if (!at) return null;
   return (
-    <div className="flex items-center justify-between text-[11px]">
+    <div className="flex items-start justify-between gap-3 text-[11px]">
       <span className="text-muted">{label}</span>
-      <span className="font-medium">{formatDate(at)}</span>
+      <span className="text-right font-medium">
+        {formatDate(at)}
+        {by && <span className="block font-normal text-muted">by {actorLabel(by)}</span>}
+      </span>
     </div>
   );
 }
@@ -436,10 +464,18 @@ export function ClipperProfileModal({
                   )}
                   <div className="mt-2 space-y-1">
                     <TimelineRow label="Work submitted" at={d.draftSubmittedAt} />
-                    <TimelineRow label="Work reviewed" at={d.draftReviewedAt} />
+                    <TimelineRow
+                      label={d.workReviewedBy?.step === "work_rejected" ? "Work rejected" : d.workReviewedBy ? "Work approved" : "Work reviewed"}
+                      at={d.draftReviewedAt}
+                      by={d.workReviewedBy}
+                    />
                     <TimelineRow label="Live post submitted" at={d.liveSubmittedAt} />
-                    <TimelineRow label="Proof reviewed" at={d.proofReviewedAt} />
-                    <TimelineRow label="Paid" at={d.paidAt} />
+                    <TimelineRow
+                      label={d.proofReviewedBy?.step === "proof_rejected" ? "Proof rejected" : d.proofReviewedBy ? "Proof approved" : "Proof reviewed"}
+                      at={d.proofReviewedAt}
+                      by={d.proofReviewedBy}
+                    />
+                    <TimelineRow label="Paid" at={d.paidAt} by={d.paidBy} />
                   </div>
                   {onOpen && (hasWork || hasProof) && (
                     <div className="mt-3 flex gap-2">
@@ -576,6 +612,7 @@ export function SubmissionCard({
   const rejected = tag === "work_rejected" || tag === "proof_rejected";
   const submittedAt = section === "submissions" ? d.draftSubmittedAt : (d.liveSubmittedAt ?? null);
   const reviewedAt = section === "submissions" ? d.draftReviewedAt : d.proofReviewedAt;
+  const reviewer = section === "submissions" ? d.workReviewedBy : d.proofReviewedBy;
   return (
     <button
       type="button"
@@ -606,6 +643,20 @@ export function SubmissionCard({
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted">Reviewed</span>
             <span className="font-medium">{formatDate(reviewedAt)}</span>
+          </div>
+        )}
+        {reviewer && !needsReview && (
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="shrink-0 text-muted">{rejected ? "Rejected by" : "Approved by"}</span>
+            <span className="truncate font-semibold" title={actorSentence(reviewer)}>
+              {actorLabel(reviewer)}
+            </span>
+          </div>
+        )}
+        {section === "proof" && d.paidAt && d.paidBy && (
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="shrink-0 text-muted">Paid by</span>
+            <span className="truncate font-semibold">{actorLabel(d.paidBy)}</span>
           </div>
         )}
         {section === "proof" && (
