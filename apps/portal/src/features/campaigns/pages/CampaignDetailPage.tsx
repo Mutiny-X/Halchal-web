@@ -162,10 +162,13 @@ const REJECT_REASON_MAX = 500;
 function SubmissionDetailModal({
   deliverableId,
   section: initialSection,
+  readOnly,
   onClose,
 }: {
   deliverableId: string;
   section: ReviewSection;
+  /** View-only team member: show everything, offer no actions. */
+  readOnly: boolean;
   onClose: () => void;
 }) {
   const { getToken } = useAuth();
@@ -265,8 +268,9 @@ function SubmissionDetailModal({
 
   const hasProof = Boolean(d && isProofStatus(d.status));
   const tag: Tag | null = d ? (section === "submissions" ? workOutcome(d) : proofOutcome(d)) : null;
-  const canReviewDraft = section === "submissions" && d?.status === "under_review";
-  const canReviewProof = section === "proof" && (d?.status === "proof_under_review" || d?.status === "live_submitted");
+  const canReviewDraft = !readOnly && section === "submissions" && d?.status === "under_review";
+  const canReviewProof =
+    !readOnly && section === "proof" && (d?.status === "proof_under_review" || d?.status === "live_submitted");
   const canReview = canReviewDraft || canReviewProof;
   // rejectionReason belongs to whichever step was rejected last.
   const rejectionHere =
@@ -491,7 +495,7 @@ function SubmissionDetailModal({
                 <LinkCard label="Approved work (to compare with the live post)" url={d.draftDriveUrl} />
               )}
 
-              {section === "submissions" && d.draftDriveUrl?.includes("drive.google.com") && (
+              {section === "submissions" && !readOnly && d.draftDriveUrl?.includes("drive.google.com") && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Automated review</p>
                   <p className="mt-1.5 text-sm text-muted">
@@ -590,7 +594,7 @@ function SubmissionDetailModal({
                     </>
                   ) : (
                     <div className="rounded-lg bg-surface-variant px-3 py-2.5 text-center text-sm text-muted">
-                      {tag ? TAG_META[tag].hint : "Nothing to review yet."}
+                      {readOnly ? "You have view-only access to this brand." : tag ? TAG_META[tag].hint : "Nothing to review yet."}
                     </div>
                   )}
                 </div>
@@ -1114,7 +1118,9 @@ export function CampaignDetailPage() {
 
   if (isPending || !campaign) return <DetailPageSkeleton />;
 
-  const editPath = id && campaign.status !== "closed" ? getWizardEditPath(id, isAdmin) : null;
+  // A view-only team member can look at everything but change nothing.
+  const readOnly = campaign.viewerAccess === "view";
+  const editPath = id && campaign.status !== "closed" && !readOnly ? getWizardEditPath(id, isAdmin) : null;
   const editLabel =
     campaign.status === "draft"
       ? "Continue editing"
@@ -1227,12 +1233,15 @@ export function CampaignDetailPage() {
                     {editLabel}
                   </Link>
                 )}
-                {campaign.status === "live" && (
+                {readOnly && (
+                  <span className="rounded-full bg-surface-variant px-3 py-1 text-xs font-semibold text-muted">View only</span>
+                )}
+                {campaign.status === "live" && !readOnly && (
                   <Button size="sm" variant="outline" onClick={() => setPendingStatus("paused")}>
                     Pause
                   </Button>
                 )}
-                {campaign.status === "paused" && (
+                {campaign.status === "paused" && !readOnly && (
                   <Button size="sm" onClick={() => setPendingStatus("live")}>
                     Resume
                   </Button>
@@ -1420,6 +1429,7 @@ export function CampaignDetailPage() {
           key={`${selectedSubmission.id}-${selectedSubmission.section}`}
           deliverableId={selectedSubmission.id}
           section={selectedSubmission.section}
+          readOnly={readOnly}
           onClose={() => setSelectedSubmission(null)}
         />
       )}

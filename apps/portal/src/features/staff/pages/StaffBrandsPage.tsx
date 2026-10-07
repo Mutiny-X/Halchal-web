@@ -60,7 +60,12 @@ export function StaffBrandsPage() {
                 </div>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted">{brand.campaignCount} campaign{brand.campaignCount !== 1 ? "s" : ""}</span>
+                <span className="flex items-center gap-2 text-muted">
+                  {brand.campaignCount} campaign{brand.campaignCount !== 1 ? "s" : ""}
+                  {brand.accessLevel === "view_only" && (
+                    <span className="rounded-full bg-surface-variant px-2 py-0.5 text-[10px] font-semibold">View only</span>
+                  )}
+                </span>
                 <svg className="h-4 w-4 text-muted group-hover:text-primary group-hover:translate-x-0.5 transition-all" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
                 </svg>

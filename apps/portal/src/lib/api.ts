@@ -521,6 +521,8 @@ export type Campaign = {
   createdAt: string;
   updatedAt?: string;
   submissionCount?: number;
+  /** "view" for a view-only team member: they can look, not change. */
+  viewerAccess?: "full" | "view";
   brandCompanyName?: string | null;
   pendingInviteEmail?: string | null;
 };
@@ -921,6 +923,7 @@ export type StaffBrand = {
   companyEmail: string | null;
   campaignCount: number;
   assignedAt: string;
+  accessLevel?: StaffAccessLevel;
 };
 
 export type StaffAccessLevel = "view_only" | "full";
@@ -1710,7 +1713,7 @@ export const staffApi = {
     apiFetch<StaffBrand[]>("/staff/brands", { accessToken: token }),
 
   brand: (token: string, brandId: string) =>
-    apiFetch<AdminBrandDetail>(`/staff/brands/${brandId}`, { accessToken: token }),
+    apiFetch<AdminBrandDetail & { accessLevel?: StaffAccessLevel }>(`/staff/brands/${brandId}`, { accessToken: token }),
 
   createCampaign: (token: string, brandId: string, body: Record<string, unknown>) =>
     apiFetch<Campaign>(`/staff/brands/${brandId}/campaigns`, {
