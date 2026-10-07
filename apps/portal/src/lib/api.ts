@@ -212,6 +212,62 @@ export async function apiFetchPublic<T>(
   return body.data as T;
 }
 
+/** A file download (PDF, CSV) from an authenticated route. Same session
+ * handling as every other call: an expired access token is renewed once
+ * and the request retried, so a download after a quiet spell just works. */
+export async function apiFetchBlob(
+  path: string,
+  options: RequestInit & { accessToken?: string; _retried?: boolean } = {},
+): Promise<Blob> {
+  const { accessToken, _retried, ...init } = options;
+  const headers = new Headers(init.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch {
+    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+  }
+  if (res.ok) return res.blob();
+
+  let body: ApiEnvelope<unknown> | null = null;
+  try {
+    body = (await res.json()) as ApiEnvelope<unknown>;
+  } catch {
+    body = null;
+  }
+  if (res.status === 401 && body?.error?.code === "UNAUTHORIZED" && accessToken && !_retried && apiAuthHandlers) {
+    const outcome = await refreshAccessToken();
+    if (outcome.kind === "refreshed") {
+      return apiFetchBlob(path, { ...init, accessToken: outcome.accessToken, _retried: true });
+    }
+    if (outcome.kind === "unavailable") {
+      throw new ApiError(
+        "NETWORK_ERROR",
+        "Couldn't refresh your session — check your connection and try again. You're still signed in.",
+      );
+    }
+    throw new ApiError("UNAUTHORIZED", "Your session expired. Please log in again.", 401);
+  }
+  throw toApiError(res, body);
+}
+
+/** Triggers a browser "Save As" for a blob without navigating away from the
+ * current page — the standard hidden-anchor-click trick, since there's no
+ * other way to prompt a download from an in-memory response body. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Give the browser a moment to start the save before the URL goes away.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit & { accessToken?: string } = {},
@@ -372,55 +428,6 @@ type RegisterPayload = {
 
 export type PublicReferenceAsset = { type: "image" | "video"; url: string; label?: string };
 export type PublicSourceAsset = { type: "drive" | "youtube"; url: string; label?: string };
-
-export type PublicCampaign = {
-  id: string;
-  title: string;
-  category: string | null;
-  platform: string;
-  platforms: string[];
-  locationType: "pan_india" | "states";
-  targetStates: string[];
-  status: string;
-  brief: string;
-  briefHook: string | null;
-  doRules: string | null;
-  avoidRules: string | null;
-  sourceAssets: PublicSourceAsset[] | null;
-  referenceAssets: PublicReferenceAsset[] | null;
-  coverImageUrl: string | null;
-  productUrl: string | null;
-  startDate: string | null;
-  brandCompanyName: string | null;
-  brandLogoUrl: string | null;
-};
-
-export type PublicDeliverableListItem = {
-  id: string;
-  platform: string;
-  status: string;
-  draftDriveUrl: string | null;
-  livePostUrl: string | null;
-  rejectionReason: string | null;
-  draftSubmittedAt: string | null;
-  participationId: string;
-  joinedAt: string;
-  creatorName: string;
-  priorRejectionCount: number;
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  shareCount: number;
-  estimatedPaise: number;
-  siblingDeliverables: Array<{ id: string; platform: string; status: string }>;
-};
-
-export const publicApi = {
-  campaign: (id: string) =>
-    apiFetchPublic<PublicCampaign>(`/public/campaigns/${id}`),
-  deliverables: (id: string) =>
-    apiFetchPublic<PublicDeliverableListItem[]>(`/public/campaigns/${id}/deliverables`),
-};
 
 export const authApi = {
   register: (payload: RegisterPayload) =>
@@ -1662,6 +1669,12 @@ export const adminApi = {
         accessToken: token,
       },
     ),
+
+  /** Campaign performance report (PDF) and the per-reel ledger (CSV). */
+  generateCampaignReport: (token: string, campaignId: string) =>
+    apiFetchBlob(`/admin/campaigns/${campaignId}/report`, { accessToken: token }),
+  downloadCampaignLedger: (token: string, campaignId: string) =>
+    apiFetchBlob(`/admin/campaigns/${campaignId}/report/ledger`, { accessToken: token }),
 
   // Pool / intake overrides
   creatorInstagramInsights: (token: string, creatorId: string, connectionId: string, refresh = false) =>

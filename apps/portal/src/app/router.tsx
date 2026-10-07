@@ -156,11 +156,6 @@ const CampaignReviewPage = lazy(() =>
     default: m.CampaignReviewPage,
   })),
 );
-const PublicCampaignPage = lazy(() =>
-  import("@/features/campaigns/pages/PublicCampaignPage").then((m) => ({
-    default: m.PublicCampaignPage,
-  })),
-);
 
 const AnalyticsPage = lazy(() =>
   import("@/features/analytics/pages/AnalyticsPage").then((m) => ({
@@ -218,10 +213,6 @@ export const router = createBrowserRouter([
     element: <RootLayout />,
     children: [
       { index: true, element: <LandingPage /> },
-      {
-        path: "share/campaigns/:id",
-        element: withSuspense(null, <PublicCampaignPage />),
-      },
       {
         path: "privacy",
         element: <PrivacyPolicyPage />,
