@@ -31,7 +31,29 @@ export type DeliverableForBoard = {
   proofReviewedAt?: string | null;
   rejectionReason?: string | null;
   paidAt?: string | null;
+  workReviewedBy?: ReviewActor | null;
+  proofReviewedBy?: ReviewActor | null;
 };
+
+/** Who made a decision on a clip. */
+export type ReviewActor = { step: string; byName: string; byRole: "admin" | "team"; at: string; reason?: string | null };
+
+const STEP_VERB: Record<string, string> = {
+  work_approved: "Work approved",
+  work_rejected: "Work rejected",
+  proof_approved: "Proof of work approved",
+  proof_rejected: "Proof of work rejected",
+};
+
+/** "Asha (team)" / "Priya (admin)". */
+export function actorLabel(a: ReviewActor): string {
+  return `${a.byName} (${a.byRole})`;
+}
+
+/** "Work approved by Asha (team)". */
+export function actorSentence(a: ReviewActor): string {
+  return `${STEP_VERB[a.step] ?? "Updated"} by ${actorLabel(a)}`;
+}
 
 export type BoardColumn = {
   id: string;
@@ -52,6 +74,10 @@ export const BOARD_COLUMNS: BoardColumn[] = [
 
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export function formatCount(n: number): string {

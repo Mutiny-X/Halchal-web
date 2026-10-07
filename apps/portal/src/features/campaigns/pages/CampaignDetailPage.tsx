@@ -29,11 +29,13 @@ import {
 import { CampaignReviewBanner } from "@/features/campaigns/components/campaign-review-banner";
 import { useCampaign, useUpdateCampaignAutoReview, useUpdateCampaignStatus } from "@/features/campaigns/hooks/use-campaigns";
 import {
+  actorSentence,
   approvedEarningsPaise,
   buildClipperProfiles,
   buildCreatorPerformance,
   formatCount,
   formatDate,
+  formatDateTime,
 } from "@/features/campaigns/lib/campaign-board-data";
 import { campaignStatusLabel, isLockedForReview } from "@/features/campaigns/lib/campaign-status";
 import {
@@ -285,6 +287,8 @@ function SubmissionDetailModal({
   const submittedAt = section === "submissions" ? d?.draftSubmittedAt : d?.liveSubmittedAt;
   const reviewedAt = section === "submissions" ? d?.draftReviewedAt : d?.proofReviewedAt;
   const stepName = section === "submissions" ? "work" : "proof";
+  // Who made the latest decision on this step (an admin or a team member).
+  const reviewer = (section === "submissions" ? d?.workReviewedBy : d?.proofReviewedBy) ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 backdrop-blur-sm sm:p-4" onClick={onClose}>
@@ -399,7 +403,17 @@ function SubmissionDetailModal({
                     ? `${section === "submissions" ? "Work submitted" : "Live post submitted"} ${formatDate(submittedAt)}`
                     : "Not submitted yet"}
                 </span>
-                {reviewedAt && !canReview && <span>Reviewed {formatDate(reviewedAt)}</span>}
+                {reviewedAt && !canReview && (
+                  <span>
+                    {reviewer ? (
+                      <>
+                        <span className="font-semibold text-foreground">{actorSentence(reviewer)}</span> · {formatDate(reviewedAt)}
+                      </>
+                    ) : (
+                      `Reviewed ${formatDate(reviewedAt)}`
+                    )}
+                  </span>
+                )}
               </div>
 
               {section === "submissions" ? (
@@ -594,11 +608,37 @@ function SubmissionDetailModal({
                     </>
                   ) : (
                     <div className="rounded-lg bg-surface-variant px-3 py-2.5 text-center text-sm text-muted">
+                      {reviewer && !canReview && (
+                        <p className="mb-1 font-semibold text-foreground">{actorSentence(reviewer)}</p>
+                      )}
                       {readOnly ? "You have view-only access to this brand." : tag ? TAG_META[tag].hint : "Nothing to review yet."}
                     </div>
                   )}
                 </div>
               </div>
+
+              {d.reviewTrail && d.reviewTrail.length > 0 && (
+                <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Who did what</p>
+                  <ol className="mt-3 space-y-3">
+                    {[...d.reviewTrail].reverse().map((entry, i) => (
+                      <li key={`${entry.at}-${i}`} className="flex gap-2.5 text-xs">
+                        <span
+                          className={cn(
+                            "mt-1 h-2 w-2 shrink-0 rounded-full",
+                            entry.step.endsWith("rejected") ? "bg-red-400" : "bg-emerald-400",
+                          )}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-semibold">{actorSentence(entry)}</p>
+                          <p className="text-muted">{formatDateTime(entry.at)}</p>
+                          {entry.reason && <p className="mt-0.5 text-muted">“{entry.reason}”</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
 
               <AutoReviewPanel
                 results={d.autoReview}

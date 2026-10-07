@@ -572,6 +572,15 @@ export type CreatorProfileSnippet = {
   avatarUrl: string | null;
 };
 
+/** One approve / reject on a clip, with who did it. */
+export type ReviewTrailEntry = {
+  step: "work_approved" | "work_rejected" | "proof_approved" | "proof_rejected";
+  byName: string;
+  byRole: "admin" | "team";
+  at: string;
+  reason: string | null;
+};
+
 export type DeliverableListItem = {
   id: string;
   platform: string;
@@ -585,6 +594,9 @@ export type DeliverableListItem = {
   /** The latest rejection's reason — for the step the status says was rejected. */
   rejectionReason: string | null;
   paidAt: string | null;
+  /** Latest decision on the work / on the proof. */
+  workReviewedBy?: ReviewTrailEntry | null;
+  proofReviewedBy?: ReviewTrailEntry | null;
   campaignId: string;
   campaignTitle: string;
   participationId: string;
@@ -618,6 +630,11 @@ export type DeliverableDetail = {
   liveSubmittedAt: string | null;
   proofReviewedAt: string | null;
   participationId: string;
+  /** Every approve / reject on this clip, oldest first. */
+  reviewTrail?: ReviewTrailEntry[];
+  workReviewedBy?: ReviewTrailEntry | null;
+  proofReviewedBy?: ReviewTrailEntry | null;
+  paidAt?: string | null;
   rejectionHistory: RejectionHistoryEvent[];
   campaign: { id: string; title: string; status: string; ratePer1kDisplay: string; budgetPaise: number };
   viewCount: number;
