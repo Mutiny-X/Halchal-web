@@ -9,7 +9,6 @@ import {
   LifeBuoy,
   Megaphone,
   Settings,
-  Shield,
   ShieldCheck,
   UserCog,
   Users,
@@ -24,8 +23,7 @@ export type PortalNavItem = {
   icon: LucideIcon;
   matchNested?: boolean;
   /** Gates visibility for restricted admin roles. Omit for items every
-   * admin can always see (or that have their own access rule, like
-   * Roles & Access, which is handled separately as super-admin-only). */
+   * admin can always see. */
   section?: AdminSection;
   /** Only rendered for Super Admins, regardless of the section matrix. */
   superAdminOnly?: boolean;
@@ -54,7 +52,6 @@ const adminNavItems: PortalNavItem[] = [
   { href: "/admin/notifications", label: "Notifications", icon: Bell, section: "notifications" },
   { href: "/admin/faqs", label: "FAQs", icon: CircleHelp, section: "faqs" },
   { href: "/admin/team", label: "Team", icon: UserCog, section: "team" },
-  { href: "/admin/roles", label: "Roles & Access", icon: Shield, superAdminOnly: true },
 ];
 
 const staffNavItems: PortalNavItem[] = [
@@ -96,7 +93,6 @@ export function resolvePortalTitle(pathname: string, role: Portal): string {
   if (pathname === "/admin/support-tickets") return "Support Tickets";
   if (pathname === "/admin/notifications") return "Notifications";
   if (pathname === "/admin/faqs") return "FAQ Management";
-  if (pathname === "/admin/roles") return "Roles & Access";
   if (pathname === "/admin/campaigns") return "Campaigns";
   if (pathname === "/campaigns") return "Campaigns";
   if (pathname.startsWith("/campaigns/new") || pathname.startsWith("/admin/campaigns/new")) {
