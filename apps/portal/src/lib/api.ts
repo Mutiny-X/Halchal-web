@@ -1386,6 +1386,20 @@ export const adminApi = {
   creator: (token: string, id: string) =>
     apiFetch<AdminCreatorDetail>(`/admin/creators/${id}`, { accessToken: token }),
 
+  /** Blocks a creator's account: no sign-in, every session ended. */
+  suspendCreator: (token: string, id: string, reason?: string) =>
+    apiFetch<{ suspended: boolean }>(`/admin/creators/${id}/suspend`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      accessToken: token,
+    }),
+
+  reinstateCreator: (token: string, id: string) =>
+    apiFetch<{ reinstated: boolean }>(`/admin/creators/${id}/reinstate`, {
+      method: "POST",
+      accessToken: token,
+    }),
+
   reviewKyc: (token: string, id: string, action: "approve" | "reject", reason?: string) =>
     apiFetch<{ id: string; kycStatus: KycStatus }>(`/admin/creators/${id}/kyc-review`, {
       method: "POST",

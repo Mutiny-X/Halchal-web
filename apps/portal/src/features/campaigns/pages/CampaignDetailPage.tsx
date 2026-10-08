@@ -60,6 +60,7 @@ import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 
+import { isOnDomain } from "@/lib/link-host";
 type Tab = "overview" | "clippers" | "board" | "submissions" | "proof" | "analytics" | "payouts";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -509,7 +510,7 @@ function SubmissionDetailModal({
                 <LinkCard label="Approved work (to compare with the live post)" url={d.draftDriveUrl} />
               )}
 
-              {section === "submissions" && !readOnly && d.draftDriveUrl?.includes("drive.google.com") && (
+              {section === "submissions" && !readOnly && d.draftDriveUrl && isOnDomain(d.draftDriveUrl, "drive.google.com") && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Automated review</p>
                   <p className="mt-1.5 text-sm text-muted">

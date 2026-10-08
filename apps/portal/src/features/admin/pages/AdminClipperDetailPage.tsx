@@ -131,6 +131,100 @@ function CampaignCardGrid({ entries, emptyMessage }: { entries: AdminCreatorCamp
   );
 }
 
+/* ── Account access: suspend / reinstate ── */
+function AccountAccessCard({ creator }: { creator: AdminCreatorDetail }) {
+  const { getToken } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["admin-creator", creator.id] });
+    void queryClient.invalidateQueries({ queryKey: ["admin-creators"] });
+  };
+  const suspend = useMutation({
+    mutationFn: () => adminApi.suspendCreator(getToken()!, creator.id, reason.trim() || undefined),
+    onSuccess: () => {
+      refresh();
+      setConfirming(false);
+      setReason("");
+      toast("Account suspended — they've been signed out everywhere");
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : "Couldn't suspend this account", "error"),
+  });
+  const reinstate = useMutation({
+    mutationFn: () => adminApi.reinstateCreator(getToken()!, creator.id),
+    onSuccess: () => {
+      refresh();
+      toast("Account reinstated — they can sign in again");
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : "Couldn't reinstate this account", "error"),
+  });
+
+  // A creator who deleted their own account has no phone number left;
+  // there is nothing to suspend or bring back.
+  if (!creator.isActive && !creator.phone) return null;
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+      <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+        <p className="text-sm font-semibold text-foreground">Account access</p>
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10px] font-bold",
+            creator.isActive ? "bg-emerald-500/15 text-emerald-500" : "bg-red-500/15 text-red-500",
+          )}
+        >
+          {creator.isActive ? "Active" : "Suspended"}
+        </span>
+      </div>
+      <div className="space-y-3 px-5 py-4">
+        {creator.isActive ? (
+          <>
+            <p className="text-sm text-muted">
+              Suspending signs this creator out everywhere at once and stops them signing in again. Their campaigns, clips
+              and history are kept. You can reinstate them later.
+            </p>
+            {confirming ? (
+              <div className="space-y-3">
+                <textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value.slice(0, 500))}
+                  placeholder="Reason (kept in the activity log, not shown to the creator)"
+                  rows={2}
+                  className="w-full rounded-xl border border-border bg-surface-variant/50 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="destructive" size="sm" onClick={() => suspend.mutate()} disabled={suspend.isPending}>
+                    {suspend.isPending ? "Suspending…" : "Suspend account"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setConfirming(false)} disabled={suspend.isPending}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
+                Suspend account…
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted">
+              This creator can't sign in. Reinstating lets them sign in again with their phone number.
+            </p>
+            <Button size="sm" onClick={() => reinstate.mutate()} disabled={reinstate.isPending}>
+              {reinstate.isPending ? "Reinstating…" : "Reinstate account"}
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── KYC review ── */
 function KycReviewCard({ creator }: { creator: AdminCreatorDetail }) {
   const { getToken } = useAuth();
@@ -495,7 +589,9 @@ export function AdminClipperDetailPage() {
               {KYC_LABEL[creator.kycStatus]}
             </span>
             {!creator.isActive && (
-              <span className="rounded-full bg-muted/20 px-2 py-0.5 text-[10px] font-bold text-muted">Inactive</span>
+              <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-500">
+                {creator.phone ? "Suspended" : "Account deleted"}
+              </span>
             )}
           </div>
           {creator.username && <p className="text-sm text-muted">@{creator.username}</p>}
@@ -508,6 +604,7 @@ export function AdminClipperDetailPage() {
         </div>
       </div>
 
+      <AccountAccessCard creator={creator} />
       <KycReviewCard creator={creator} />
       <OnboardingVerificationCard creator={creator} />
 
