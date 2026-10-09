@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { Plus, Search } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
@@ -119,16 +120,12 @@ function CreateBrandModal({ onClose }: { onClose: () => void }) {
                   <span className="font-semibold">{created.companyName}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted">Login email</span>
+                  <span className="text-muted">Company email</span>
                   <span className="font-semibold">{created.companyEmail}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted">Temp password</span>
-                  <span className="font-mono font-semibold text-primary">{created.tempPassword}</span>
                 </div>
               </div>
 
-              <p className="text-xs text-muted">Share these login credentials with the brand.</p>
+              <p className="text-xs text-muted">The brand doesn't get a login — your team runs its campaigns from here.</p>
               <Button className="w-full" onClick={onClose}>Done</Button>
             </div>
           ) : (
@@ -152,7 +149,7 @@ function CreateBrandModal({ onClose }: { onClose: () => void }) {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*"
+                    accept={COVER_ACCEPT}
                     className="hidden"
                     onChange={handleLogoChange}
                   />

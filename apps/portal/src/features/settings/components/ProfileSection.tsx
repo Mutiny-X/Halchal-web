@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,21 @@ import { cn } from "@/lib/utils";
 import { portalApi, ApiError } from "@/lib/api";
 import { useAuth } from "@/providers/auth-provider";
 
+import { PasswordRulesList } from "@/components/auth/password-rules-list";
+import { PASSWORD_MIN_LENGTH, passwordProblem } from "@/lib/password-rules";
+
+/** Links are saved as full https addresses (the API refuses anything else,
+ * since they are shown as clickable links): a bare "instagram.com/name"
+ * gets https:// added, and blank entries are left out. */
+function normalizedSocialLinks(links: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(links)) {
+    const value = raw.trim();
+    if (!value) continue;
+    out[key] = /^https?:\/\//i.test(value) ? value.replace(/^http:\/\//i, "https://") : `https://${value}`;
+  }
+  return out;
+}
 function initials(name: string) {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) || "U";
 }
@@ -45,7 +61,7 @@ function AvatarUpload({ avatarUrl, name }: { avatarUrl: string | null | undefine
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={COVER_ACCEPT}
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -61,7 +77,7 @@ function AvatarUpload({ avatarUrl, name }: { avatarUrl: string | null | undefine
         >
           {uploadMutation.isPending ? "Uploading…" : "Change photo"}
         </Button>
-        <p className="mt-1 text-xs text-muted">JPG or PNG, up to 5MB.</p>
+        <p className="mt-1 text-xs text-muted">JPG, PNG or WebP, up to 5MB.</p>
       </div>
     </div>
   );
@@ -113,7 +129,7 @@ export function ProfileSection({ showBioAndSocials = true }: { showBioAndSocials
       portalApi.updateProfile(token, {
         displayName: displayName.trim() || undefined,
         phone: phone.trim() || undefined,
-        ...(showBioAndSocials && { bio: bio.trim() || undefined, socialLinks }),
+        ...(showBioAndSocials && { bio: bio.trim() || undefined, socialLinks: normalizedSocialLinks(socialLinks) }),
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["me"] });
@@ -232,8 +248,10 @@ export function ProfileSection({ showBioAndSocials = true }: { showBioAndSocials
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Min 8 characters"
+              placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
+              autoComplete="new-password"
             />
+            {newPassword && <PasswordRulesList value={newPassword} className="pt-1" />}
           </div>
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted">Confirm new password</label>
@@ -252,7 +270,7 @@ export function ProfileSection({ showBioAndSocials = true }: { showBioAndSocials
             disabled={
               passwordMutation.isPending ||
               !currentPassword ||
-              newPassword.length < 8 ||
+              passwordProblem(newPassword) !== null ||
               newPassword !== confirmPassword
             }
           >

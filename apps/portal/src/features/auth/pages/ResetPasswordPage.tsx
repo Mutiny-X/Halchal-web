@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { AuthPasswordField } from "@/components/auth/auth-password-field";
 import { AuthPrimaryButton } from "@/components/auth/auth-primary-button";
+import { PasswordRulesList } from "@/components/auth/password-rules-list";
 import {
   authFooterLinkClass,
   authFormClass,
@@ -16,12 +17,20 @@ import {
 } from "@/components/layout/auth-split-layout";
 import { useToast } from "@/components/ui/toaster";
 import { authApi, ApiError } from "@/lib/api";
+import { PASSWORD_MIN_LENGTH, passwordProblem } from "@/lib/password-rules";
 
 export function ResetPasswordPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const token = searchParams.get("token") ?? "";
+  // The link's token is read once, then taken out of the address bar so it
+  // isn't left in the browser history or copied along with the page address.
+  const [token] = useState(() => searchParams.get("token") ?? "");
+  useEffect(() => {
+    if (searchParams.has("token")) {
+      window.history.replaceState(window.history.state, "", window.location.pathname);
+    }
+  }, [searchParams]);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,6 +39,11 @@ export function ResetPasswordPage() {
     e.preventDefault();
     if (!token) {
       toast("Reset link is invalid or missing.", "error");
+      return;
+    }
+    const problem = passwordProblem(password);
+    if (problem) {
+      toast(problem, "error");
       return;
     }
     if (password !== confirm) {
@@ -57,7 +71,7 @@ export function ResetPasswordPage() {
       <AuthMobileBrandMark />
       <AuthPageHeader
         title="Choose a new password"
-        description="Enter a new password for your brand account."
+        description="Choose a new password for your Halchal account."
       />
       <form onSubmit={onSubmit} className={authFormClass}>
         <AuthPasswordField
@@ -65,13 +79,18 @@ export function ResetPasswordPage() {
           label="New password"
           value={password}
           onChange={setPassword}
+          autoComplete="new-password"
+          minLength={PASSWORD_MIN_LENGTH}
           required
         />
+        <PasswordRulesList value={password} />
         <AuthPasswordField
           id="confirm"
           label="Confirm password"
           value={confirm}
           onChange={setConfirm}
+          autoComplete="new-password"
+          minLength={PASSWORD_MIN_LENGTH}
           required
         />
         <AuthPrimaryButton loading={loading}>

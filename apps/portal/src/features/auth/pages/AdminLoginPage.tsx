@@ -12,13 +12,15 @@ import {
   AuthSplitLayout,
 } from "@/components/layout/auth-split-layout";
 import { useToast } from "@/components/ui/toaster";
-import { ApiError } from "@/lib/api";
 import { safeRedirectPath } from "@/lib/safe-redirect";
 import { useAuth } from "@/providers/auth-provider";
 
+import { signInErrorMessage } from "@/lib/sign-in-error";
 export function AdminLoginPage() {
   const [searchParams] = useSearchParams();
-  const redirectTo = safeRedirectPath(searchParams.get("next"));
+  // Only an explicit ?next= overrides the user's own home page.
+  const next = searchParams.get("next");
+  const redirectTo = next ? safeRedirectPath(next) : undefined;
   const { login } = useAuth();
   const { toast } = useToast();
   const [email, setEmail] = useState("");
@@ -32,10 +34,7 @@ export function AdminLoginPage() {
       await login(email, password, "admin", redirectTo);
       toast("Welcome back!");
     } catch (err) {
-      toast(
-        err instanceof ApiError ? err.message : "Login failed",
-        "error",
-      );
+      toast(signInErrorMessage(err), "error");
     } finally {
       setLoading(false);
     }
@@ -74,9 +73,9 @@ export function AdminLoginPage() {
         </AuthPrimaryButton>
       </form>
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        Brand account?{" "}
+        Team member?{" "}
         <Link to="/login" className="font-medium text-primary hover:underline">
-          Brand login
+          Team sign in
         </Link>
       </p>
     </AuthSplitLayout>

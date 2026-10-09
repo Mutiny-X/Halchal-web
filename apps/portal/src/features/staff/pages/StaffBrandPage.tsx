@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { DetailPageSkeleton } from "@/components/ui/page-skeletons";
 import { useToast } from "@/components/ui/toaster";
 import { formatPlatformList } from "@/features/campaigns/lib/platform-labels";
-import { staffApi, type Campaign } from "@/lib/api";
+import { ApiError, staffApi, type Campaign } from "@/lib/api";
 import { useAuth } from "@/providers/auth-provider";
+import { campaignStatusLabel } from "@/features/campaigns/lib/campaign-status";
 
 /* ── helpers (same as AdminBrandDetailPage) ── */
 function initials(name: string) {
@@ -25,6 +26,7 @@ function formatBudget(paise: number) {
 const STATUS_STYLE: Record<string, string> = {
   live: "bg-emerald-500 text-white",
   draft: "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-500 text-white",
 };
@@ -54,7 +56,7 @@ function CampaignCard({ c, onClick }: { c: Campaign & { submissionCount?: number
               <span key={p} className="rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">{p}</span>
             ))}
           </div>
-          <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>{c.status}</span>
+          <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusStyle}`}>{campaignStatusLabel(c.status)}</span>
         </div>
         <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/70 to-transparent" />
       </div>
@@ -110,13 +112,14 @@ export function StaffBrandPage() {
         wizardStep: "basics",
       }),
     onSuccess: (campaign) => navigate(`/campaigns/${campaign.id}/edit`),
-    onError: () => toast("Failed to create campaign", "error"),
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to create campaign", "error"),
   });
 
   if (isPending) return <DetailPageSkeleton />;
   if (!brand) return null;
 
   const liveCampaigns = brand.campaigns.filter((c) => c.status === "live").length;
+  const viewOnly = brand.accessLevel === "view_only";
 
   return (
     <div className="space-y-6">
@@ -148,7 +151,12 @@ export function StaffBrandPage() {
             </div>
           </div>
 
-          <h1 className="text-xl font-bold">{brand.companyName}</h1>
+          <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold">
+            {brand.companyName}
+            {viewOnly && (
+              <span className="rounded-full bg-surface-variant px-2.5 py-0.5 text-[11px] font-semibold text-muted">View only</span>
+            )}
+          </h1>
           <div className="mt-1 flex flex-wrap gap-3 text-sm text-muted">
             <span className="flex items-center gap-1.5">
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -182,7 +190,7 @@ export function StaffBrandPage() {
             </button>
           ))}
         </div>
-        {tab === "campaigns" && (
+        {tab === "campaigns" && !viewOnly && (
           <Button size="sm" className="mb-1 gap-1.5" onClick={() => createCampaign.mutate()} disabled={createCampaign.isPending}>
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -197,13 +205,17 @@ export function StaffBrandPage() {
         brand.campaigns.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface py-16 text-center">
             <p className="font-medium">No campaigns yet</p>
-            <p className="mt-1 text-sm text-muted">Create the first campaign for this brand.</p>
-            <Button className="mt-4 gap-2" onClick={() => createCampaign.mutate()} disabled={createCampaign.isPending}>
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {createCampaign.isPending ? "Creating…" : "Create Campaign"}
-            </Button>
+            <p className="mt-1 text-sm text-muted">
+              {viewOnly ? "You have view-only access to this brand." : "Create the first campaign for this brand."}
+            </p>
+            {!viewOnly && (
+              <Button className="mt-4 gap-2" onClick={() => createCampaign.mutate()} disabled={createCampaign.isPending}>
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                {createCampaign.isPending ? "Creating…" : "Create Campaign"}
+              </Button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">

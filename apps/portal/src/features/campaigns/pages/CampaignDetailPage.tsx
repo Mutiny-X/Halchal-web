@@ -11,31 +11,56 @@ import { DetailPageSkeleton } from "@/components/ui/page-skeletons";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useToast } from "@/components/ui/toaster";
+import { UploadProgressView } from "@/components/ui/upload-progress";
 import {
   ClipperProfileGrid,
   ClipperProfileModal,
+  CreatorAvatar,
   Leaderboard,
+  LinkCard,
   MediaPreview,
+  reviewSectionFor,
+  StageTag,
   StatusBoard,
   SubmissionGrid,
+  useEscape,
+  type ReviewSection,
 } from "@/features/campaigns/components/campaign-board-widgets";
+import { CampaignReviewBanner } from "@/features/campaigns/components/campaign-review-banner";
 import { useCampaign, useUpdateCampaignAutoReview, useUpdateCampaignStatus } from "@/features/campaigns/hooks/use-campaigns";
 import {
+  actorSentence,
+  approvedEarningsPaise,
   buildClipperProfiles,
   buildCreatorPerformance,
   formatCount,
   formatDate,
-  type ClipperProfile,
+  formatDateTime,
 } from "@/features/campaigns/lib/campaign-board-data";
+import { campaignStatusLabel, isLockedForReview } from "@/features/campaigns/lib/campaign-status";
+import {
+  countBy,
+  deliverableStage,
+  isProofStatus,
+  proofOutcome,
+  STAGE_ORDER,
+  TAG_META,
+  workOutcome,
+  type Stage,
+  type Tag,
+} from "@/features/campaigns/lib/clipper-stage";
+import { formatPlatformLabel, formatPlatformList } from "@/features/campaigns/lib/platform-labels";
+import { parseRulePoints } from "@/features/campaigns/lib/rule-points";
 import { getWizardEditPath } from "@/features/campaigns/lib/wizard-paths";
 import { CreatorProfileModal } from "@/features/creators/components/CreatorProfileModal";
 import { useSubmission } from "@/features/submissions/hooks/use-submissions";
-import { resolveMediaUrl } from "@/lib/media-url";
+import { adminApi, downloadBlob, portalApi, ApiError, type AutoReviewResult, type Campaign, type CampaignCreatorPayout, type UploadProgress } from "@/lib/api";
 import { formatInr } from "@/lib/format";
+import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
-import { adminApi, portalApi, downloadBlob, ApiError, type AutoReviewResult, type CampaignCreatorPayout } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 
+import { isOnDomain } from "@/lib/link-host";
 type Tab = "overview" | "clippers" | "board" | "submissions" | "proof" | "analytics" | "payouts";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -50,6 +75,7 @@ const TABS: { id: Tab; label: string }[] = [
 const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
   live:   "bg-emerald-500 text-white",
   draft:  "bg-zinc-600 text-white",
+  pending_review: "bg-indigo-500 text-white",
   paused: "bg-orange-500 text-white",
   closed: "bg-red-600 text-white",
 };
@@ -128,30 +154,49 @@ function ClipperIntakeDialog({
   );
 }
 
-/* ── Work Submissions / Proof of Work (actionable, open review modal) ── */
+/* ── Work Submissions / Proof of Work review window ──
+   Opens on one step — the work, or the proof of work — and shows only that
+   step's media, dates, rejection reason and actions. A switch at the top
+   moves between the two for the same clipper, so nothing from one step is
+   ever approved while looking at the other. */
+
+const REJECT_REASON_MAX = 500;
 
 function SubmissionDetailModal({
   deliverableId,
-  section,
+  section: initialSection,
+  readOnly,
   onClose,
 }: {
   deliverableId: string;
-  section: "submissions" | "proof";
+  section: ReviewSection;
+  /** View-only team member: show everything, offer no actions. */
+  readOnly: boolean;
   onClose: () => void;
 }) {
   const { getToken } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [section, setSectionState] = useState<ReviewSection>(initialSection);
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showCreatorProfile, setShowCreatorProfile] = useState(false);
+  const [confirmApproveProof, setConfirmApproveProof] = useState(false);
   const adminDraftInputRef = useRef<HTMLInputElement>(null);
+  useEscape(onClose, !showCreatorProfile && !confirmApproveProof);
 
   const { data: d, isPending } = useSubmission(deliverableId);
+
+  function setSection(next: ReviewSection) {
+    setSectionState(next);
+    setShowRejectForm(false);
+    setRejectReason("");
+  }
 
   function invalidateAfterReview() {
     void queryClient.invalidateQueries({ queryKey: ["submission", "deliverable", deliverableId] });
     void queryClient.invalidateQueries({ queryKey: ["campaign-deliverables"] });
+    void queryClient.invalidateQueries({ queryKey: ["campaign-payouts"] });
     setShowRejectForm(false);
     setRejectReason("");
   }
@@ -159,33 +204,48 @@ function SubmissionDetailModal({
   const reviewMutation = useMutation({
     mutationFn: (body: { action: "approve" | "reject"; rejectionReason?: string }) =>
       portalApi.submissions.review(getToken()!, deliverableId, body),
-    onSuccess: () => {
+    onSuccess: (_res, body) => {
       invalidateAfterReview();
-      toast("Submission updated");
+      toast(body.action === "approve" ? "Work approved — the clipper can post it live now" : "Work rejected — the clipper will be notified");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Review failed", "error"),
+    onError: (err) => {
+      invalidateAfterReview();
+      toast(err instanceof ApiError ? err.message : "Review failed", "error");
+    },
   });
 
   const approveProofMutation = useMutation({
     mutationFn: () => portalApi.submissions.approveProof(getToken()!, deliverableId),
     onSuccess: () => {
+      setConfirmApproveProof(false);
       invalidateAfterReview();
-      toast("Proof approved — creator can now see their earnings");
+      toast("Proof of work approved — the clipper is now waiting for payment");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Approval failed", "error"),
+    onError: (err) => {
+      setConfirmApproveProof(false);
+      invalidateAfterReview();
+      toast(err instanceof ApiError ? err.message : "Approval failed", "error");
+    },
   });
 
   const rejectProofMutation = useMutation({
     mutationFn: () => portalApi.submissions.rejectProof(getToken()!, deliverableId, rejectReason.trim()),
     onSuccess: () => {
       invalidateAfterReview();
-      toast("Proof rejected — creator will be notified");
+      toast("Proof of work rejected — the clipper will be notified");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Rejection failed", "error"),
+    onError: (err) => {
+      invalidateAfterReview();
+      toast(err instanceof ApiError ? err.message : "Rejection failed", "error");
+    },
   });
 
+  const [draftCopyProgress, setDraftCopyProgress] = useState<UploadProgress | null>(null);
   const uploadAdminDraftMutation = useMutation({
-    mutationFn: (file: File) => portalApi.submissions.uploadAdminDraftCopy(getToken()!, deliverableId, file),
+    mutationFn: (file: File) => {
+      setDraftCopyProgress(null);
+      return portalApi.submissions.uploadAdminDraftCopy(getToken()!, deliverableId, file, setDraftCopyProgress);
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["submission", "deliverable", deliverableId] });
       toast("Uploaded — automated review will check this now");
@@ -209,38 +269,115 @@ function SubmissionDetailModal({
     rejectProofMutation.isPending ||
     uploadAdminDraftMutation.isPending;
 
-  const canReviewDraft = d?.status === "under_review";
-  const canReviewProof = d?.status === "proof_under_review" || d?.status === "live_submitted";
+  const hasProof = Boolean(d && isProofStatus(d.status));
+  const tag: Tag | null = d ? (section === "submissions" ? workOutcome(d) : proofOutcome(d)) : null;
+  const canReviewDraft = !readOnly && section === "submissions" && d?.status === "under_review";
+  const canReviewProof =
+    !readOnly && section === "proof" && (d?.status === "proof_under_review" || d?.status === "live_submitted");
+  const canReview = canReviewDraft || canReviewProof;
+  // rejectionReason belongs to whichever step was rejected last.
+  const rejectionHere =
+    d?.rejectionReason &&
+    ((section === "submissions" && d.status === "draft_rejected") || (section === "proof" && d.status === "proof_rejected"))
+      ? d.rejectionReason
+      : null;
   const canRefreshViews =
+    section === "proof" &&
     Boolean(d?.livePostUrl) &&
     (d?.status === "live_submitted" || d?.status === "proof_under_review" || d?.status === "proof_approved");
+  const submittedAt = section === "submissions" ? d?.draftSubmittedAt : d?.liveSubmittedAt;
+  const reviewedAt = section === "submissions" ? d?.draftReviewedAt : d?.proofReviewedAt;
+  const stepName = section === "submissions" ? "work" : "proof";
+  // Who made the latest decision on this step (an admin or a team member).
+  const reviewer = (section === "submissions" ? d?.workReviewedBy : d?.proofReviewedBy) ?? null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 backdrop-blur-sm sm:p-4" onClick={onClose}>
       {showCreatorProfile && d && (
         <CreatorProfileModal creatorId={d.creator.id} onClose={() => setShowCreatorProfile(false)} />
       )}
-      <div className="flex h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h2 className="font-bold text-lg">Work Submission Details</h2>
-            {d && <StatusPill status={d.status} />}
+      <ConfirmDialog
+        open={confirmApproveProof}
+        title="Approve this proof of work?"
+        description="You're confirming the live post is genuine and follows the brief. The clipper becomes eligible for payment based on its views."
+        confirmLabel="Approve proof"
+        loading={approveProofMutation.isPending}
+        onConfirm={() => approveProofMutation.mutate()}
+        onCancel={() => setConfirmApproveProof(false)}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={section === "submissions" ? "Work submission" : "Proof of work"}
+        onClick={(e) => e.stopPropagation()}
+        className="flex h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h2 className="text-lg font-bold">{section === "submissions" ? "Work submission" : "Proof of work"}</h2>
+            {tag && <StageTag tag={tag} />}
           </div>
-          <button onClick={onClose} className="rounded-lg p-1 text-muted hover:bg-surface-variant hover:text-foreground">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-xl border border-border bg-surface-variant/40 p-0.5 text-xs font-semibold">
+              {(["submissions", "proof"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={s === "proof" && !hasProof}
+                  onClick={() => setSection(s)}
+                  title={s === "proof" && !hasProof ? "No live post submitted yet" : undefined}
+                  className={cn(
+                    "rounded-lg px-3 py-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                    section === s ? "bg-surface text-foreground shadow-sm" : "text-muted hover:text-foreground",
+                  )}
+                >
+                  {s === "submissions" ? "Work" : "Proof of work"}
+                </button>
+              ))}
+            </div>
+            <button onClick={onClose} aria-label="Close" className="rounded-lg p-1 text-muted hover:bg-surface-variant hover:text-foreground">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {isPending || !d ? (
           <div className="flex-1 p-10 text-center text-sm text-muted">Loading…</div>
         ) : (
-          <div className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto p-6 lg:grid-cols-[260px_1fr_260px]">
+          <div className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 sm:p-6 lg:grid-cols-[260px_1fr_280px]">
             {/* LEFT — campaign + creator */}
             <div className="space-y-4">
               <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Campaign Details</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Clipper</p>
+                <div className="mt-3 flex items-center gap-3">
+                  <CreatorAvatar
+                    name={d.creator.displayName ?? d.creator.username ?? "C"}
+                    url={d.creatorProfile?.avatarUrl}
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">{d.creator.displayName ?? d.creator.username ?? "Creator"}</p>
+                    {d.creator.username && <p className="truncate text-xs text-muted">@{d.creator.username}</p>}
+                  </div>
+                </div>
+                {d.creatorProfile && (
+                  <div className="mt-3 rounded-lg border border-border bg-surface px-3 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Submitted as</p>
+                    <p className="mt-1 text-sm font-semibold text-primary">@{d.creatorProfile.handle}</p>
+                    <p className="text-[11px] capitalize text-muted">
+                      {formatPlatformLabel(d.platform)}
+                      {d.creatorProfile.label ? ` · ${d.creatorProfile.label}` : ""}
+                    </p>
+                  </div>
+                )}
+                <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => setShowCreatorProfile(true)}>
+                  View profile
+                </Button>
+              </div>
+
+              <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Campaign</p>
                 <p className="mt-2 font-bold">{d.campaign.title}</p>
                 <div className="mt-3 space-y-1.5 text-sm">
                   <div className="flex items-center justify-between">
@@ -257,57 +394,73 @@ function SubmissionDetailModal({
                   </div>
                 </div>
               </div>
-
-              <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Creator</p>
-                <div className="mt-3 flex items-center gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/15 text-lg font-bold text-primary">
-                    {(d.creator.displayName ?? d.creator.username ?? "C").charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold">{d.creator.displayName ?? d.creator.username ?? "Creator"}</p>
-                    {d.creator.username && <p className="truncate text-xs text-muted">@{d.creator.username}</p>}
-                  </div>
-                </div>
-                {d.creatorProfile && (
-                  <div className="mt-3 rounded-lg border border-border bg-surface px-3 py-2.5">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Submitted as</p>
-                    <p className="mt-1 text-sm font-semibold text-primary">@{d.creatorProfile.handle}</p>
-                    <p className="text-[11px] text-muted capitalize">{d.creatorProfile.platform}{d.creatorProfile.label ? ` · ${d.creatorProfile.label}` : ""}</p>
-                  </div>
-                )}
-                <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => setShowCreatorProfile(true)}>
-                  View Profile
-                </Button>
-              </div>
             </div>
 
-            {/* MIDDLE — media + notes */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between text-xs text-muted">
-                <span>{d.draftSubmittedAt ? `Submitted ${formatDate(d.draftSubmittedAt)}` : "Not submitted yet"}</span>
-                {(d.draftReviewedAt || d.proofReviewedAt) && (
-                  <span>Reviewed {formatDate(d.proofReviewedAt ?? d.draftReviewedAt!)}</span>
+            {/* MIDDLE — this step's media */}
+            <div className="min-w-0 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                <span>
+                  {submittedAt
+                    ? `${section === "submissions" ? "Work submitted" : "Live post submitted"} ${formatDate(submittedAt)}`
+                    : "Not submitted yet"}
+                </span>
+                {reviewedAt && !canReview && (
+                  <span>
+                    {reviewer ? (
+                      <>
+                        <span className="font-semibold text-foreground">{actorSentence(reviewer)}</span> · {formatDate(reviewedAt)}
+                      </>
+                    ) : (
+                      `Reviewed ${formatDate(reviewedAt)}`
+                    )}
+                  </span>
                 )}
               </div>
 
-              <div className="space-y-3">
-                {section === "submissions" ? (
-                  d.draftDriveUrl ? (
-                    <MediaPreview label="Draft" url={d.draftDriveUrl} />
-                  ) : (
-                    <div className="flex items-center justify-center rounded-xl border border-dashed border-border py-10 text-sm text-muted">
-                      Nothing submitted yet
-                    </div>
-                  )
-                ) : d.livePostUrl ? (
-                  <MediaPreview label="Live post" url={d.livePostUrl} />
+              {section === "submissions" ? (
+                d.draftDriveUrl ? (
+                  <MediaPreview label="Submitted work" url={d.draftDriveUrl} />
                 ) : (
                   <div className="flex items-center justify-center rounded-xl border border-dashed border-border py-10 text-sm text-muted">
-                    Nothing submitted yet
+                    No work submitted yet
                   </div>
-                )}
-              </div>
+                )
+              ) : d.livePostUrl ? (
+                <>
+                  <MediaPreview label="Live post" url={d.livePostUrl} />
+                  {/* Embeds can fail (private account, removed post) — the link always works. */}
+                  <LinkCard label="Open the live post" url={d.livePostUrl} />
+                </>
+              ) : (
+                <div className="flex items-center justify-center rounded-xl border border-dashed border-border py-10 text-sm text-muted">
+                  No live post submitted yet
+                </div>
+              )}
+
+              {rejectionHere && (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4">
+                  <p className="text-sm font-semibold text-destructive">
+                    Why the {section === "submissions" ? "work" : "proof of work"} was rejected
+                  </p>
+                  <p className="mt-1.5 whitespace-pre-wrap text-sm">{rejectionHere}</p>
+                </div>
+              )}
+
+              {/* Work that already moved on — point to where it went. */}
+              {section === "submissions" && tag === "work_approved" && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface-variant/50 p-4 text-sm">
+                  <span className="text-muted">
+                    {hasProof
+                      ? "This work was approved and the clipper has posted it live."
+                      : "This work was approved — waiting for the clipper to post it live."}
+                  </span>
+                  {hasProof && (
+                    <Button size="sm" variant="outline" onClick={() => setSection("proof")}>
+                      Open proof of work
+                    </Button>
+                  )}
+                </div>
+              )}
 
               {section === "proof" && d.livePostUrl && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
@@ -333,12 +486,13 @@ function SubmissionDetailModal({
                       </button>
                     )}
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
                     {[
                       { label: "Views", value: formatCount(d.viewCount) },
                       { label: "Likes", value: formatCount(d.likeCount) },
                       { label: "Comments", value: formatCount(d.commentCount) },
                       { label: "Shares", value: formatCount(d.shareCount) },
+                      { label: "Earning", value: formatInr(d.estimatedPaise) },
                     ].map(({ label, value }) => (
                       <div key={label} className="rounded-lg border border-border bg-surface px-3 py-2 text-center">
                         <p className="text-lg font-black">{value}</p>
@@ -352,16 +506,23 @@ function SubmissionDetailModal({
                 </div>
               )}
 
-              {section === "submissions" && d.draftDriveUrl?.includes("drive.google.com") && (
+              {section === "proof" && d.draftDriveUrl && (
+                <LinkCard label="Approved work (to compare with the live post)" url={d.draftDriveUrl} />
+              )}
+
+              {section === "submissions" && !readOnly && d.draftDriveUrl && isOnDomain(d.draftDriveUrl, "drive.google.com") && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">
-                    Automated review
-                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Automated review</p>
                   <p className="mt-1.5 text-sm text-muted">
                     {d.adminUploadedDraftUrl
                       ? "A copy is on file — automated review can check this submission."
                       : "This is a Google Drive link — automated review can't fetch it directly. Download it from the Drive link above, then upload a copy here."}
                   </p>
+                  {uploadAdminDraftMutation.isPending && (
+                    <div className="mt-3 max-w-sm rounded-lg border border-border bg-surface px-3 py-2.5">
+                      <UploadProgressView progress={draftCopyProgress} />
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => adminDraftInputRef.current?.click()}
@@ -387,34 +548,29 @@ function SubmissionDetailModal({
                   />
                 </div>
               )}
-
-              {d.rejectionReason && (
-                <div className="rounded-xl bg-surface-variant/50 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    Rejection reason
-                  </p>
-                  <p className="mt-1.5 text-sm text-muted">{d.rejectionReason}</p>
-                </div>
-              )}
             </div>
 
-            {/* RIGHT — actions + history */}
+            {/* RIGHT — this step's actions + history */}
             <div className="space-y-4">
               <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Actions</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted">
+                  {section === "submissions" ? "Review work" : "Review proof of work"}
+                </p>
                 <div className="mt-3 space-y-3">
-                  {(canReviewDraft || canReviewProof) && showRejectForm ? (
+                  {canReview && showRejectForm ? (
                     <>
                       <textarea
                         value={rejectReason}
                         onChange={(e) => setRejectReason(e.target.value)}
-                        rows={3}
-                        placeholder="Rejection reason (required)"
+                        rows={4}
+                        maxLength={REJECT_REASON_MAX}
+                        autoFocus
+                        placeholder={`What should the clipper fix? They'll see this with the rejected ${stepName}.`}
                         className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                       />
+                      <p className="text-right text-[11px] text-muted">
+                        {rejectReason.length}/{REJECT_REASON_MAX}
+                      </p>
                       <div className="flex gap-2">
                         <Button variant="outline" className="flex-1" onClick={() => setShowRejectForm(false)} disabled={isMutating}>
                           Back
@@ -425,39 +581,65 @@ function SubmissionDetailModal({
                           disabled={isMutating || !rejectReason.trim()}
                           onClick={() =>
                             canReviewDraft
-                              ? reviewMutation.mutate({ action: "reject", rejectionReason: rejectReason })
+                              ? reviewMutation.mutate({ action: "reject", rejectionReason: rejectReason.trim() })
                               : rejectProofMutation.mutate()
                           }
                         >
-                          {isMutating ? "Rejecting…" : "Confirm Reject"}
+                          {isMutating ? "Rejecting…" : `Reject ${stepName}`}
                         </Button>
                       </div>
                     </>
                   ) : canReviewDraft ? (
                     <>
                       <Button className="w-full" onClick={() => reviewMutation.mutate({ action: "approve" })} disabled={isMutating}>
-                        {reviewMutation.isPending ? "Accepting…" : "Accept submission"}
+                        {reviewMutation.isPending ? "Approving…" : "Approve work"}
                       </Button>
                       <Button variant="destructive" className="w-full" onClick={() => setShowRejectForm(true)} disabled={isMutating}>
-                        Reject submission
+                        Reject work
                       </Button>
                     </>
                   ) : canReviewProof ? (
                     <>
-                      <Button className="w-full" onClick={() => approveProofMutation.mutate()} disabled={isMutating}>
-                        {approveProofMutation.isPending ? "Accepting…" : "Accept submission"}
+                      <Button className="w-full" onClick={() => setConfirmApproveProof(true)} disabled={isMutating}>
+                        Approve proof of work
                       </Button>
                       <Button variant="destructive" className="w-full" onClick={() => setShowRejectForm(true)} disabled={isMutating}>
-                        Reject submission
+                        Reject proof of work
                       </Button>
                     </>
                   ) : (
                     <div className="rounded-lg bg-surface-variant px-3 py-2.5 text-center text-sm text-muted">
-                      {d.status === "draft_pending" ? "Nothing to review yet." : "Already reviewed."}
+                      {reviewer && !canReview && (
+                        <p className="mb-1 font-semibold text-foreground">{actorSentence(reviewer)}</p>
+                      )}
+                      {readOnly ? "You have view-only access to this brand." : tag ? TAG_META[tag].hint : "Nothing to review yet."}
                     </div>
                   )}
                 </div>
               </div>
+
+              {d.reviewTrail && d.reviewTrail.length > 0 && (
+                <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Who did what</p>
+                  <ol className="mt-3 space-y-3">
+                    {[...d.reviewTrail].reverse().map((entry, i) => (
+                      <li key={`${entry.at}-${i}`} className="flex gap-2.5 text-xs">
+                        <span
+                          className={cn(
+                            "mt-1 h-2 w-2 shrink-0 rounded-full",
+                            entry.step.endsWith("rejected") ? "bg-red-400" : "bg-emerald-400",
+                          )}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-semibold">{actorSentence(entry)}</p>
+                          <p className="text-muted">{formatDateTime(entry.at)}</p>
+                          {entry.reason && <p className="mt-0.5 text-muted">“{entry.reason}”</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
 
               <AutoReviewPanel
                 results={d.autoReview}
@@ -465,17 +647,18 @@ function SubmissionDetailModal({
                 maxRetries={d.autoReviewMaxRetries}
               />
 
-              {d.rejectionHistory.length > 0 && (
+              {section === "submissions" && d.rejectionHistory.length > 0 && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">History</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Earlier rejected work</p>
                   <div className="mt-3 space-y-2">
                     {d.rejectionHistory.map((event, i) => (
                       <div key={event.id} className="rounded-lg border border-border bg-surface px-3 py-2.5">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-semibold">Attempt {d.rejectionHistory.length - i}</span>
-                          <StatusPill status="draft_rejected" />
+                          <StageTag tag="work_rejected" />
                         </div>
-                        <p className="mt-1 text-xs text-muted">
+                        <p className="mt-1.5 text-xs">{event.rejectionReason}</p>
+                        <p className="mt-1 text-[11px] text-muted">
                           {formatDate(event.rejectedAt)}
                           {event.reviewedByDisplayName ? ` · ${event.reviewedByDisplayName}` : ""}
                         </p>
@@ -633,7 +816,9 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const token = getToken()!;
-  const [confirmTarget, setConfirmTarget] = useState<{ type: "all" } | { type: "creator"; creatorId: string; creatorName: string } | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<
+    { type: "all" } | { type: "creator"; creatorId: string; creatorProfileId: string; creatorName: string } | null
+  >(null);
 
   const { data: payouts = [], isPending } = useQuery({
     queryKey: ["campaign-payouts", campaignId],
@@ -656,7 +841,8 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
   });
 
   const payCreatorMutation = useMutation({
-    mutationFn: (creatorId: string) => adminApi.payoutCreator(token, campaignId, creatorId),
+    mutationFn: (row: { creatorId: string; creatorProfileId: string }) =>
+      adminApi.payoutCreator(token, campaignId, row.creatorId, row.creatorProfileId),
     onSuccess: (res) => {
       invalidate();
       setConfirmTarget(null);
@@ -676,7 +862,7 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
   if (payouts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface py-16 text-center">
-        <p className="font-medium">No approved work yet</p>
+        <p className="font-medium">No approved proof of work yet</p>
         <p className="mt-1 text-sm text-muted">Payouts unlock once you approve proof of work in the Proof of Work tab.</p>
       </div>
     );
@@ -690,18 +876,18 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
         description={
           confirmTarget?.type === "all"
             ? `This adds ${formatInr(totalUnpaidPaise)} to the wallets of ${creatorsWithUnpaid} creator${creatorsWithUnpaid === 1 ? "" : "s"}. No money is sent yet — creators can then withdraw it, and you pay those withdrawals from the Payouts page.`
-            : `This adds ${formatInr(payouts.find((p) => confirmTarget?.type === "creator" && p.creatorId === confirmTarget.creatorId)?.totalUnpaidPaise ?? 0)} to this creator's wallet. No money is sent yet — they can then withdraw it, and you pay it from the Payouts page.`
+            : `This adds ${formatInr(payouts.find((p) => confirmTarget?.type === "creator" && p.creatorProfileId === confirmTarget.creatorProfileId)?.totalUnpaidPaise ?? 0)} to this creator's wallet. No money is sent yet — they can then withdraw it, and you pay it from the Payouts page.`
         }
         confirmLabel="Credit to wallet"
         loading={isMutating}
         onCancel={() => setConfirmTarget(null)}
         onConfirm={() => {
           if (confirmTarget?.type === "all") payAllMutation.mutate();
-          else if (confirmTarget?.type === "creator") payCreatorMutation.mutate(confirmTarget.creatorId);
+          else if (confirmTarget?.type === "creator") payCreatorMutation.mutate(confirmTarget);
         }}
       />
 
-      <div className="flex items-center justify-between rounded-2xl border border-border bg-surface p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-5">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-muted">Unpaid earnings</p>
           <p className="mt-1 text-2xl font-black">{formatInr(totalUnpaidPaise)}</p>
@@ -714,13 +900,14 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
 
       <div className="space-y-3">
         {payouts.map((p: CampaignCreatorPayout) => (
-          <div key={p.creatorId} className="rounded-2xl border border-border bg-surface p-4">
+          <div key={p.creatorProfileId} className="rounded-2xl border border-border bg-surface p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-black text-primary">
                 {initials(p.creatorName)}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{p.creatorName}</p>
+                <p className="truncate text-[11px] text-muted">@{p.handle}</p>
                 <p className="text-xs text-muted">
                   {formatInr(p.totalApprovedPaise)} approved · {formatInr(p.totalPaidPaise)} credited
                 </p>
@@ -730,7 +917,14 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
                   size="sm"
                   variant="outline"
                   disabled={isMutating}
-                  onClick={() => setConfirmTarget({ type: "creator", creatorId: p.creatorId, creatorName: p.creatorName })}
+                  onClick={() =>
+                    setConfirmTarget({
+                      type: "creator",
+                      creatorId: p.creatorId,
+                      creatorProfileId: p.creatorProfileId,
+                      creatorName: p.creatorName,
+                    })
+                  }
                 >
                   Credit {formatInr(p.totalUnpaidPaise)}
                 </Button>
@@ -748,11 +942,13 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{formatInr(d.paidAmountPaise ?? d.earnedPaise)}</span>
                     {d.paidAt ? (
-                      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
-                        Paid
-                      </span>
+                      <StageTag tag="paid" />
+                    ) : d.earnedPaise > 0 ? (
+                      <StageTag tag="awaiting_payment" />
                     ) : (
-                      <span className="text-xs text-muted">unpaid</span>
+                      <span className="text-xs text-muted" title="Nothing to pay until the post gets views">
+                        No views yet
+                      </span>
                     )}
                   </div>
                 </div>
@@ -760,6 +956,148 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Overview ── */
+
+const REQUIREMENT_LABEL: Record<string, string> = {
+  mandatory: "Must use",
+  optional: "Optional",
+  not_required: "Not needed",
+};
+
+/** Start dates are stored as the day at UTC midnight — read them in UTC so
+ * the day never shifts with the viewer's timezone. */
+function formatStartDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function RuleList({ title, tone, text }: { title: string; tone: "do" | "avoid"; text: string | null }) {
+  const points = parseRulePoints(text ?? "");
+  if (points.length === 0) return null;
+  const color = tone === "do" ? "text-emerald-500" : "text-destructive";
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-5">
+      <p className={cn("text-xs font-semibold uppercase tracking-wider", color)}>{title}</p>
+      <ul className="mt-3 space-y-2 text-sm">
+        {points.map((point) => (
+          <li key={point.id} className="flex gap-2">
+            <span className={cn("mt-0.5 shrink-0 font-bold", color)}>{tone === "do" ? "✓" : "✕"}</span>
+            <span className="whitespace-pre-wrap">{point.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CampaignOverview({ campaign }: { campaign: Campaign }) {
+  const structured = Boolean(campaign.briefHook || campaign.doRules || campaign.avoidRules);
+  const facts: Array<{ label: string; value: string }> = [
+    { label: "Pay rate", value: campaign.ratePer1kDisplay },
+    { label: "Max payout per clip", value: formatInr(campaign.maxPayoutPaise) },
+    { label: "Budget", value: formatInr(campaign.budgetPaise) },
+    { label: "Start date", value: campaign.startDate ? formatStartDay(campaign.startDate) : "Not set" },
+    { label: "Formats", value: formatPlatformList(campaign.platforms ?? []) || "—" },
+    {
+      label: "Location",
+      value:
+        campaign.locationType === "states" && campaign.targetStates.length > 0
+          ? campaign.targetStates.join(", ")
+          : "All of India",
+    },
+    { label: "Category", value: campaign.category || "Not set" },
+    { label: "Source video", value: REQUIREMENT_LABEL[campaign.sourceVideoRequirement] ?? "—" },
+    { label: "Source audio", value: REQUIREMENT_LABEL[campaign.sourceAudioRequirement] ?? "—" },
+  ];
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+      <div className="min-w-0 space-y-5">
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted">Campaign brief</p>
+          {structured ? (
+            campaign.briefHook && (
+              <>
+                <p className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-primary">Hook</p>
+                <p className="mt-1 whitespace-pre-wrap text-base font-semibold leading-relaxed">{campaign.briefHook}</p>
+              </>
+            )
+          ) : (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{campaign.brief || "No brief added yet."}</p>
+          )}
+          {campaign.productUrl && (
+            <a
+              href={campaign.productUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-block text-sm font-medium text-primary hover:underline"
+            >
+              Product page →
+            </a>
+          )}
+        </div>
+
+        {structured && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <RuleList title="Do" tone="do" text={campaign.doRules} />
+            <RuleList title="Avoid" tone="avoid" text={campaign.avoidRules} />
+          </div>
+        )}
+
+        {campaign.referenceAssets && campaign.referenceAssets.length > 0 && (
+          <div className="rounded-2xl border border-border bg-surface p-5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted">Sample content</p>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {campaign.referenceAssets.map((asset, i) => (
+                <a
+                  key={`${asset.url}-${i}`}
+                  href={resolveMediaUrl(asset.url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group overflow-hidden rounded-xl border border-border bg-surface-variant"
+                >
+                  {asset.type === "image" ? (
+                    <img src={resolveMediaUrl(asset.url)} alt={asset.label ?? "Sample"} className="aspect-[4/5] w-full object-cover" />
+                  ) : (
+                    <video src={resolveMediaUrl(asset.url)} className="aspect-[4/5] w-full bg-black object-cover" muted preload="metadata" />
+                  )}
+                  {asset.label && <p className="truncate px-2 py-1.5 text-[11px] text-muted group-hover:text-foreground">{asset.label}</p>}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {campaign.sourceAssets && campaign.sourceAssets.length > 0 && (
+          <div className="rounded-2xl border border-border bg-surface p-5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted">Source files for clippers</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {campaign.sourceAssets.map((asset, i) => (
+                <LinkCard
+                  key={`${asset.url}-${i}`}
+                  label={asset.label || (asset.type === "upload" ? "Uploaded file" : asset.type === "youtube" ? "YouTube" : "Google Drive")}
+                  url={asset.type === "upload" ? resolveMediaUrl(asset.url) : asset.url}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-border bg-surface p-5 lg:self-start">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted">Key details</p>
+        <dl className="mt-3 divide-y divide-border/60">
+          {facts.map((f) => (
+            <div key={f.label} className="flex items-start justify-between gap-4 py-2.5 text-sm">
+              <dt className="shrink-0 text-muted">{f.label}</dt>
+              <dd className="text-right font-medium">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
       </div>
     </div>
   );
@@ -774,13 +1112,23 @@ export function CampaignDetailPage() {
   const tabs = isAdmin ? [...TABS, { id: "payouts" as const, label: "Payouts" }] : TABS;
   const { getToken } = useAuth();
   const { toast } = useToast();
-  const [searchParams] = useSearchParams();
-  const initialTabParam = searchParams.get("tab") as Tab | null;
-  const [tab, setTab] = useState<Tab>(
-    initialTabParam && TABS.some((t) => t.id === initialTabParam) ? initialTabParam : "overview",
-  );
-  const [selectedSubmission, setSelectedSubmission] = useState<{ id: string; section: "submissions" | "proof" } | null>(null);
-  const [selectedClipper, setSelectedClipper] = useState<ClipperProfile | null>(null);
+  // The open tab lives in the URL, so a refresh or a shared link lands on it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tab: Tab = tabs.some((t) => t.id === tabParam) ? (tabParam as Tab) : "overview";
+  function setTab(next: Tab) {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        if (next === "overview") params.delete("tab");
+        else params.set("tab", next);
+        return params;
+      },
+      { replace: true },
+    );
+  }
+  const [selectedSubmission, setSelectedSubmission] = useState<{ id: string; section: ReviewSection } | null>(null);
+  const [selectedClipperId, setSelectedClipperId] = useState<string | null>(null);
   const [pendingStatus, setPendingStatus] = useState<"live" | "paused" | null>(null);
   const [showClipperIntakeDialog, setShowClipperIntakeDialog] = useState(false);
 
@@ -809,30 +1157,37 @@ export function CampaignDetailPage() {
     onError: (err) => toast(err instanceof ApiError ? err.message : "Could not update intake", "error"),
   });
 
+  const fileSlug = (campaign?.title ?? "campaign").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "campaign";
   const generateReportMutation = useMutation({
     mutationFn: () => adminApi.generateCampaignReport(getToken()!, id!),
     onSuccess: (blob) => {
-      const slug = (campaign?.title ?? "campaign").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-      downloadBlob(blob, `${slug || "campaign"}-report.pdf`);
+      downloadBlob(blob, `${fileSlug}-report.pdf`);
       toast("Report downloaded");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not generate report", "error"),
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not generate the report", "error"),
   });
-
   const downloadLedgerMutation = useMutation({
     mutationFn: () => adminApi.downloadCampaignLedger(getToken()!, id!),
     onSuccess: (blob) => {
-      const slug = (campaign?.title ?? "campaign").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-      downloadBlob(blob, `${slug || "campaign"}-ledger.csv`);
+      downloadBlob(blob, `${fileSlug}-ledger.csv`);
       toast("Ledger downloaded");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not download ledger", "error"),
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not download the ledger", "error"),
   });
 
   if (isPending || !campaign) return <DetailPageSkeleton />;
 
-  const editPath = id && campaign.status !== "closed" ? getWizardEditPath(id, isAdmin) : null;
-  const editLabel = campaign.status === "draft" ? "Continue editing" : "Edit campaign";
+  // A view-only team member can look at everything but change nothing.
+  const readOnly = campaign.viewerAccess === "view";
+  const editPath = id && campaign.status !== "closed" && !readOnly ? getWizardEditPath(id, isAdmin) : null;
+  const editLabel =
+    campaign.status === "draft"
+      ? "Continue editing"
+      : isLockedForReview(campaign.status, isAdmin)
+        ? "View submission"
+        : campaign.status === "pending_review"
+          ? "Review / edit"
+          : "Edit campaign";
   // Staff arrive via a specific brand's page, not a generic campaigns list — fall back to browser history for them.
   const backTo = isAdmin ? "/admin/campaigns" : role === "brand" ? "/campaigns" : undefined;
 
@@ -847,13 +1202,6 @@ export function CampaignDetailPage() {
     }
   }
 
-  async function copyShareLink() {
-    if (!id) return;
-    const url = `${window.location.origin}/share/campaigns/${id}`;
-    await navigator.clipboard.writeText(url);
-    toast("Read-only campaign link copied");
-  }
-
   async function toggleAutoReview() {
     if (!id || !campaign) return;
     const next = !campaign.autoReviewEnabled;
@@ -866,25 +1214,24 @@ export function CampaignDetailPage() {
   }
 
   const clippers = buildClipperProfiles(deliverables);
-  // Anything that has ever had a draft submitted stays here permanently — approving
-  // or progressing to the proof stage only updates the status pill, it doesn't move sections.
-  const workSubmissions = deliverables.filter((d) => d.status !== "draft_pending");
-  const proofSubmissions = deliverables.filter((d) => ["live_submitted", "proof_under_review", "proof_approved", "proof_rejected"].includes(d.status));
-  const reviews  = deliverables.filter((d) => d.status === "under_review");
-  const approved = deliverables.filter((d) => ["draft_approved", "proof_approved"].includes(d.status));
-  const proofPending = deliverables.filter((d) => ["live_submitted", "proof_under_review"].includes(d.status));
+  const selectedClipper = clippers.find((c) => c.participationId === selectedClipperId) ?? null;
+  const stageCounts = countBy(deliverables, (d) => deliverableStage(d));
+  const count = (...stages: Stage[]) => stages.reduce((sum, s) => sum + (stageCounts[s] ?? 0), 0);
+  const workToReview = count("work_review");
+  const proofToReview = count("proof_review");
+  const proofApproved = count("awaiting_payment", "paid");
   const tabBadgeCounts: Partial<Record<Tab, number>> = {
-    submissions: reviews.length,
-    proof: proofPending.length,
+    submissions: workToReview,
+    proof: proofToReview,
   };
-  const totalClippers = new Set(deliverables.map((d) => d.participationId)).size;
+  const totalClippers = clippers.length;
 
   const creatorPerformance = buildCreatorPerformance(deliverables);
   const totalViews = deliverables.reduce((sum, d) => sum + d.viewCount, 0);
   const totalLikes = deliverables.reduce((sum, d) => sum + d.likeCount, 0);
   const totalComments = deliverables.reduce((sum, d) => sum + d.commentCount, 0);
   const totalShares = deliverables.reduce((sum, d) => sum + d.shareCount, 0);
-  const totalEarningsPaise = deliverables.reduce((sum, d) => sum + d.estimatedPaise, 0);
+  const approvedEarnings = deliverables.reduce((sum, d) => sum + approvedEarningsPaise(d), 0);
 
   const campaignStatusStyle = CAMPAIGN_STATUS_STYLE[campaign.status] ?? CAMPAIGN_STATUS_STYLE.draft;
 
@@ -892,11 +1239,13 @@ export function CampaignDetailPage() {
     <div className="space-y-5">
       <BackButton to={backTo} label="Back to campaigns" />
 
-      {/* ── Side-by-side hero ── */}
+      <CampaignReviewBanner campaign={campaign} isAdmin={isAdmin} />
+
+      {/* ── Hero ── */}
       <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-        <div className="flex items-start gap-0">
+        <div className="flex flex-col sm:flex-row sm:items-stretch">
           {/* Cover image — 16:9, the standard cover ratio used across the app */}
-          <div className="relative aspect-video w-56 shrink-0 overflow-hidden bg-surface-variant">
+          <div className="relative aspect-video w-full shrink-0 overflow-hidden bg-surface-variant sm:w-56">
             {campaign.coverImageUrl ? (
               <img
                 src={resolveMediaUrl(campaign.coverImageUrl)}
@@ -914,42 +1263,64 @@ export function CampaignDetailPage() {
           </div>
 
           {/* Info panel */}
-          <div className="flex flex-1 flex-col justify-between p-5 min-w-0">
-            <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 flex-col justify-between gap-4 p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${campaignStatusStyle}`}>
-                    {campaign.status}
+                    {campaignStatusLabel(campaign.status)}
                   </span>
-                  {campaign.platforms?.map(p => (
+                  {campaign.platforms?.map((p) => (
                     <span key={p} className="rounded-full bg-surface-variant px-2 py-0.5 text-[10px] text-muted">
-                      {p}
+                      {formatPlatformLabel(p)}
                     </span>
                   ))}
                 </div>
-                <h1 className="mt-2 text-xl font-black leading-tight truncate">{campaign.title}</h1>
+                <h1 className="mt-2 break-words text-xl font-black leading-tight">{campaign.title}</h1>
                 <p className="mt-0.5 text-sm font-semibold text-primary">{campaign.ratePer1kDisplay}</p>
               </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:justify-end">
                 {editPath && (
                   <Link to={editPath} className={cn(buttonVariants({ size: "sm", variant: "outline" }), "shrink-0")}>
                     {editLabel}
                   </Link>
                 )}
-                {campaign.status === "live" && (
+                {readOnly && (
+                  <span className="rounded-full bg-surface-variant px-3 py-1 text-xs font-semibold text-muted">View only</span>
+                )}
+                {campaign.status === "live" && !readOnly && (
                   <Button size="sm" variant="outline" onClick={() => setPendingStatus("paused")}>
                     Pause
                   </Button>
                 )}
-                {campaign.status === "paused" && (
+                {campaign.status === "paused" && !readOnly && (
                   <Button size="sm" onClick={() => setPendingStatus("live")}>
                     Resume
                   </Button>
                 )}
-                {campaign.status !== "draft" && (
-                  <Button size="sm" variant="outline" onClick={() => void copyShareLink()}>
-                    Share
-                  </Button>
+                {/* What a brand gets instead of a share link: the report (PDF)
+                    and the per-reel ledger (CSV). Admin-only on the API. */}
+                {isAdmin && campaign.status !== "draft" && campaign.status !== "pending_review" && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={generateReportMutation.isPending}
+                      onClick={() => generateReportMutation.mutate()}
+                      title="Generate a detailed performance report (PDF) for this campaign"
+                    >
+                      {generateReportMutation.isPending ? "Generating…" : "Generate report"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={downloadLedgerMutation.isPending}
+                      onClick={() => downloadLedgerMutation.mutate()}
+                      title="Download a spreadsheet (CSV) with views, reach and engagement for every clip in this campaign"
+                    >
+                      {downloadLedgerMutation.isPending ? "Downloading…" : "Download ledger"}
+                    </Button>
+                  </>
                 )}
                 {isAdmin && (
                   <Button
@@ -968,63 +1339,53 @@ export function CampaignDetailPage() {
                     Auto-verification {campaign.autoReviewEnabled ? "on" : "off"}
                   </Button>
                 )}
-                {isAdmin && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={generateReportMutation.isPending}
-                    onClick={() => void generateReportMutation.mutateAsync()}
-                    title="Generate a detailed performance report PDF for this campaign"
-                  >
-                    {generateReportMutation.isPending ? "Generating…" : "Generate report"}
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={downloadLedgerMutation.isPending}
-                    onClick={() => void downloadLedgerMutation.mutateAsync()}
-                    title="Download a per-reel CSV ledger (views, reach, engagement, etc.) for every deliverable in this campaign"
-                  >
-                    {downloadLedgerMutation.isPending ? "Downloading…" : "Download ledger"}
-                  </Button>
-                )}
               </div>
             </div>
 
             {/* Quick stats row */}
-            <div className="mt-4 flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               {[
-                { label: "Clippers",  value: totalClippers },
-                { label: "In Review", value: reviews.length },
-                { label: "Approved",  value: approved.length },
-                { label: "Pool",      value: `${campaign.poolPercent}%` },
-              ].map(({ label, value }) => (
-                <div key={label} className="rounded-xl border border-border bg-surface-variant px-4 py-2 text-center">
-                  <p className="text-base font-black">{value}</p>
+                { label: "Clippers", value: totalClippers, onClick: () => setTab("clippers") },
+                { label: "Work to review", value: workToReview, onClick: () => setTab("submissions"), alert: workToReview > 0 },
+                { label: "Proof to review", value: proofToReview, onClick: () => setTab("proof"), alert: proofToReview > 0 },
+                { label: "Proof approved", value: proofApproved, onClick: () => setTab("proof") },
+                { label: "Pool used", value: `${campaign.poolPercent}%` },
+              ].map(({ label, value, onClick, alert }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={onClick}
+                  disabled={!onClick}
+                  className={cn(
+                    "rounded-xl border px-3 py-2 text-center transition-colors enabled:hover:border-primary/50 sm:px-4",
+                    alert ? "border-warning/50 bg-warning/10" : "border-border bg-surface-variant",
+                  )}
+                >
+                  <p className={cn("text-base font-black", alert && "text-warning")}>{value}</p>
                   <p className="text-[10px] text-muted">{label}</p>
-                </div>
+                </button>
               ))}
               {isAdmin ? (
                 <button
                   type="button"
                   onClick={() => setShowClipperIntakeDialog(true)}
-                  className="rounded-xl border border-border bg-surface-variant px-4 py-2 text-center transition-colors hover:border-primary/50 hover:bg-primary/5"
+                  className="rounded-xl border border-border bg-surface-variant px-3 py-2 text-center transition-colors hover:border-primary/50 hover:bg-primary/5 sm:px-4"
                 >
                   <StatusPill status={campaign.newClipperIntakeStatus} />
                   <p className="mt-1 text-[10px] text-muted">Slots · manage</p>
                 </button>
               ) : (
-                <div className="rounded-xl border border-border bg-surface-variant px-4 py-2 text-center">
+                <div className="rounded-xl border border-border bg-surface-variant px-3 py-2 text-center sm:px-4">
                   <StatusPill status={campaign.newClipperIntakeStatus} />
                   <p className="mt-1 text-[10px] text-muted">Slots</p>
                 </div>
               )}
-              <div className="ml-auto text-right">
+              <div className="w-full sm:ml-auto sm:w-auto sm:text-right">
                 <p className="text-xs text-muted">Budget</p>
-                <p className="text-sm font-bold">{formatInr(campaign.budgetUsedPaise)} <span className="text-muted font-normal">/ {formatInr(campaign.budgetPaise)}</span></p>
-                <ProgressBar className="mt-1 w-32" percent={campaign.poolPercent} variant={campaign.poolPercent > 80 ? "warning" : "default"} />
+                <p className="text-sm font-bold">
+                  {formatInr(campaign.budgetUsedPaise)} <span className="font-normal text-muted">/ {formatInr(campaign.budgetPaise)}</span>
+                </p>
+                <ProgressBar className="mt-1 w-full sm:ml-auto sm:w-32" percent={campaign.poolPercent} variant={campaign.poolPercent > 80 ? "warning" : "default"} />
               </div>
             </div>
           </div>
@@ -1032,12 +1393,14 @@ export function CampaignDetailPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex overflow-x-auto border-b border-border">
+      <div className="flex overflow-x-auto border-b border-border" role="tablist">
         {tabs.map((t) => {
           const badgeCount = tabBadgeCounts[t.id] ?? 0;
           return (
             <button
               key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
               className={`relative flex shrink-0 items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors ${
                 tab === t.id ? "text-foreground" : "text-muted hover:text-foreground"
@@ -1045,7 +1408,10 @@ export function CampaignDetailPage() {
             >
               {t.label}
               {badgeCount > 0 && (
-                <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-white">
+                <span
+                  className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-white"
+                  title={`${badgeCount} waiting for review`}
+                >
                   {badgeCount > 99 ? "99+" : badgeCount}
                 </span>
               )}
@@ -1055,57 +1421,48 @@ export function CampaignDetailPage() {
         })}
       </div>
 
-      {/* ── Overview ── */}
-      {tab === "overview" && (
-        <div className="rounded-2xl border border-border bg-surface p-5">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted">Campaign Brief</p>
-          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{campaign.brief}</p>
-          {campaign.productUrl && (
-            <a href={campaign.productUrl} target="_blank" rel="noopener noreferrer"
-              className="mt-4 inline-block text-sm font-medium text-primary hover:underline">
-              Product page →
-            </a>
-          )}
-        </div>
+      {tab === "overview" && <CampaignOverview campaign={campaign} />}
+
+      {tab === "clippers" && (
+        <ClipperProfileGrid items={clippers} onSelect={(c) => setSelectedClipperId(c.participationId)} />
       )}
 
-      {/* ── Working Clippers ── */}
-      {tab === "clippers" && <ClipperProfileGrid items={clippers} onSelect={setSelectedClipper} />}
+      {tab === "board" && (
+        <StatusBoard
+          deliverables={deliverables}
+          onOpen={(d) => setSelectedSubmission({ id: d.id, section: reviewSectionFor(d) })}
+        />
+      )}
 
-      {/* ── Status Board ── */}
-      {tab === "board" && <StatusBoard deliverables={deliverables} />}
-
-      {/* ── Work Submissions ── */}
       {tab === "submissions" && (
         <SubmissionGrid
-          items={workSubmissions}
-          onSelect={(id) => setSelectedSubmission({ id, section: "submissions" })}
-          emptyMessage="No work submissions yet."
+          items={deliverables}
+          section="submissions"
+          onSelect={(deliverableId) => setSelectedSubmission({ id: deliverableId, section: "submissions" })}
+          emptyMessage="No work submitted yet."
         />
       )}
 
-      {/* ── Proof of Work ── */}
       {tab === "proof" && (
         <SubmissionGrid
-          items={proofSubmissions}
-          onSelect={(id) => setSelectedSubmission({ id, section: "proof" })}
-          emptyMessage="No proof submissions yet."
+          items={deliverables}
+          section="proof"
+          onSelect={(deliverableId) => setSelectedSubmission({ id: deliverableId, section: "proof" })}
+          emptyMessage="No proof of work submitted yet. It shows up here once a clipper posts approved work live."
         />
       )}
 
-      {/* ── Analytics ── */}
       {tab === "analytics" && (
         <div className="space-y-5">
-          {/* Overall campaign performance */}
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Campaign Performance</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Campaign performance</p>
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
               {[
-                { label: "Total Views",    value: formatCount(totalViews) },
-                { label: "Total Likes",    value: formatCount(totalLikes) },
-                { label: "Total Comments", value: formatCount(totalComments) },
-                { label: "Total Shares",   value: formatCount(totalShares) },
-                { label: "Total Earnings", value: formatInr(totalEarningsPaise) },
+                { label: "Total views", value: formatCount(totalViews) },
+                { label: "Total likes", value: formatCount(totalLikes) },
+                { label: "Total comments", value: formatCount(totalComments) },
+                { label: "Total shares", value: formatCount(totalShares) },
+                { label: "Earned (approved proof)", value: formatInr(approvedEarnings) },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-2xl border border-border bg-surface p-5 text-center">
                   <p className="text-2xl font-black">{value}</p>
@@ -1115,62 +1472,45 @@ export function CampaignDetailPage() {
             </div>
           </div>
 
-          {/* Top performers leaderboard */}
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Top Performers</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Top performers</p>
             <Leaderboard items={creatorPerformance} />
           </div>
 
-          {/* Pipeline breakdown */}
           <div className="rounded-2xl border border-border bg-surface p-5">
-            <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">Pipeline Breakdown</p>
-            <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-              {[
-                { label: "Total Clippers", value: String(totalClippers) },
-                { label: "In Review",      value: String(reviews.length) },
-                { label: "Proof Pending",  value: String(proofSubmissions.length) },
-                { label: "Approved",       value: String(approved.length) },
-              ].map(({ label, value }) => (
-                <div key={label} className="rounded-xl border border-border bg-surface-variant/30 p-4 text-center">
-                  <p className="text-xl font-black">{value}</p>
-                  <p className="mt-1 text-xs text-muted">{label}</p>
-                </div>
-              ))}
-            </div>
-            {[
-              { label: "Draft Pending",       count: deliverables.filter(d => d.status === "draft_pending").length,      color: "bg-zinc-400" },
-              { label: "Under Review",        count: deliverables.filter(d => d.status === "under_review").length,       color: "bg-yellow-400" },
-              { label: "Draft Approved",      count: deliverables.filter(d => d.status === "draft_approved").length,     color: "bg-blue-400" },
-              { label: "Live Submitted",      count: deliverables.filter(d => d.status === "live_submitted").length,     color: "bg-orange-400" },
-              { label: "Proof Under Review",  count: deliverables.filter(d => d.status === "proof_under_review").length, color: "bg-orange-400" },
-              { label: "Proof Approved",      count: deliverables.filter(d => d.status === "proof_approved").length,     color: "bg-emerald-400" },
-              { label: "Rejected",            count: deliverables.filter(d => ["draft_rejected","proof_rejected"].includes(d.status)).length, color: "bg-red-400" },
-            ].map(({ label, count, color }) => (
-              <div key={label} className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">Pipeline</p>
+            <p className="mb-4 text-xs text-muted">Each format a clipper joined with, by where it stands now.</p>
+            {STAGE_ORDER.filter((s) => s !== "proof_approved").map((stage) => (
+              <div key={stage} className="flex items-center justify-between border-b border-border/40 py-2.5 last:border-0">
                 <div className="flex items-center gap-2">
-                  <span className={`h-2 w-2 rounded-full ${color}`} />
-                  <span className="text-sm">{label}</span>
+                  <span className={cn("h-2 w-2 rounded-full", TAG_META[stage].dot)} />
+                  <span className="text-sm">{TAG_META[stage].label}</span>
                 </div>
-                <span className="text-sm font-semibold">{count}</span>
+                <span className="text-sm font-semibold">{stageCounts[stage] ?? 0}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* ── Payouts ── */}
       {tab === "payouts" && isAdmin && id && <PayoutsPanel campaignId={id} />}
 
       {selectedSubmission && (
         <SubmissionDetailModal
+          key={`${selectedSubmission.id}-${selectedSubmission.section}`}
           deliverableId={selectedSubmission.id}
           section={selectedSubmission.section}
+          readOnly={readOnly}
           onClose={() => setSelectedSubmission(null)}
         />
       )}
 
-      {selectedClipper && (
-        <ClipperProfileModal clipper={selectedClipper} onClose={() => setSelectedClipper(null)} />
+      {selectedClipper && !selectedSubmission && (
+        <ClipperProfileModal
+          clipper={selectedClipper}
+          onClose={() => setSelectedClipperId(null)}
+          onOpen={(deliverableId, section) => setSelectedSubmission({ id: deliverableId, section })}
+        />
       )}
 
       <ConfirmDialog

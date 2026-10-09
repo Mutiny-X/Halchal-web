@@ -19,7 +19,7 @@ describe("upload rules (match the API)", () => {
     expect(checkMediaFile(fakeFile("image/svg+xml", 1))).not.toBeNull();
     expect(checkMediaFile(fakeFile("text/html", 1))).not.toBeNull();
     expect(checkMediaFile(fakeFile("video/mp4", 1), "image")).toMatch(/Images must be/);
-    expect(checkMediaFile(fakeFile("video/mp4", 6 * 1024 * MB))).toMatch(/max is 5GB/);
+    expect(checkMediaFile(fakeFile("video/mp4", 6 * 1024 * MB))).toMatch(/max is 4.9GB/);
   });
 });
 
@@ -35,6 +35,28 @@ describe("source files from device (3 GB)", () => {
   });
   it("still refuses non-media files first", () => {
     expect(checkSourceFile(fakeFile("text/html", 1))).toMatch(/must be/);
+  });
+});
+
+describe("file types when the browser doesn't say (e.g. .mov on Windows Chrome)", () => {
+  const f = (name: string, type: string, size = 1000) => ({ name, type, size }) as File;
+  it("falls back to the extension", async () => {
+    const { fileContentType, checkMediaFile, checkCoverFile, VIDEO_ACCEPT } = await import("./upload-rules");
+    expect(fileContentType(f("clip.MOV", ""))).toBe("video/quicktime");
+    expect(fileContentType(f("clip.mp4", "application/octet-stream"))).toBe("video/mp4");
+    expect(fileContentType(f("photo.jpg", "image/jpg"))).toBe("image/jpeg");
+    expect(fileContentType(f("clip.mkv", ""))).toBe("");
+    expect(checkMediaFile(f("clip.mov", ""), "video")).toBeNull();
+    expect(checkCoverFile(f("cover.webp", ""))).toBeNull();
+    expect(checkMediaFile(f("clip.mkv", ""), "video")).toMatch(/MP4, MOV or WebM/);
+    // The picker lists extensions too, so Windows doesn't hide .mov files.
+    expect(VIDEO_ACCEPT).toContain(".mov");
+  });
+
+  it("stays under R2's single-upload ceiling", async () => {
+    const { checkMediaFile } = await import("./upload-rules");
+    expect(checkMediaFile(f("big.mp4", "video/mp4", 4.8 * 1024 ** 3), "video")).toBeNull();
+    expect(checkMediaFile(f("big.mp4", "video/mp4", 5 * 1024 ** 3), "video")).toMatch(/max is 4.9GB/);
   });
 });
 

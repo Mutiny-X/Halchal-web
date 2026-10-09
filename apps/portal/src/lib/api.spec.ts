@@ -103,12 +103,46 @@ describe("API client error shapes", () => {
   });
 });
 
+/** Stands in for the browser's XMLHttpRequest (used for the storage PUT,
+ * since fetch can't report upload progress). */
+function fakeXhr(status: number, opts: { networkError?: boolean } = {}) {
+  const sent: Array<{ method: string; url: string; headers: Record<string, string>; body: unknown }> = [];
+  class FakeXHR {
+    upload: { onprogress: ((e: { loaded: number; total: number; lengthComputable: boolean }) => void) | null } = { onprogress: null };
+    status = 0;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    private req = { method: "", url: "", headers: {} as Record<string, string> };
+    open(method: string, url: string) {
+      this.req.method = method;
+      this.req.url = url;
+    }
+    setRequestHeader(name: string, value: string) {
+      this.req.headers[name] = value;
+    }
+    send(body: Blob) {
+      sent.push({ ...this.req, body });
+      queueMicrotask(() => {
+        if (opts.networkError) return this.onerror?.();
+        this.upload.onprogress?.({ loaded: Math.floor(body.size / 2), total: body.size, lengthComputable: true });
+        this.upload.onprogress?.({ loaded: body.size, total: body.size, lengthComputable: true });
+        this.status = status;
+        this.onload?.();
+      });
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", FakeXHR);
+  return sent;
+}
+
 describe("direct uploads: browser → storage, never through the API", () => {
   afterEach(() => vi.unstubAllGlobals());
   const file = () => new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" });
 
   it("presign → PUT straight to storage → complete; the API never receives the bytes", async () => {
     const calls: Array<{ url: string; method?: string; body: unknown }> = [];
+    const puts = fakeXhr(200);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -124,30 +158,51 @@ describe("direct uploads: browser → storage, never through the API", () => {
       }),
     );
     const { portalApi } = await import("./api");
-    const out = await portalApi.campaigns.uploadCoverImage("tok", file());
+    const progress: Array<{ phase: string; percent?: number }> = [];
+    const out = await portalApi.campaigns.uploadCoverImage("tok", file(), (p) => progress.push(p));
 
     expect(calls.map((c) => c.url.replace(/^https?:\/\/[^/]+/, ""))).toEqual([
       "/uploads/direct/presign",
-      "/pending/x.png?sig",
       "/uploads/direct/complete",
     ]);
     expect(JSON.parse(calls[0].body as string)).toMatchObject({ purpose: "campaign-cover", contentType: "image/png", size: 3 });
-    expect(calls[1]).toMatchObject({ method: "PUT" });
-    expect(calls[1].body).toBeInstanceOf(File); // the bytes went to storage…
-    expect(calls.filter((c) => c.body instanceof File || c.body instanceof FormData)).toHaveLength(1); // …and only there
+    // The bytes went to storage, with the signed headers…
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toMatchObject({ method: "PUT", url: "https://r2.example/pending/x.png?sig", headers: { "Content-Type": "image/png" } });
+    expect(puts[0].body).toBeInstanceOf(File);
+    // …and never to the API.
+    expect(calls.some((c) => c.body instanceof File || c.body instanceof FormData)).toBe(false);
     expect(out.url).toBe("https://pub/cover-images/x.png");
+    // Progress: 0% → … → 100%, then the server check.
+    expect(progress[0]).toMatchObject({ phase: "uploading", percent: 0 });
+    expect(progress.some((p) => p.percent === 100)).toBe(true);
+    expect(progress.at(-1)).toEqual({ phase: "checking" });
   });
 
   it("a failed PUT is a readable error and complete is never called", async () => {
     const urls: string[] = [];
+    fakeXhr(403);
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       urls.push(url);
-      if (url.endsWith("/presign")) return json(200, { success: true, error: null, data: { uploadId: "t", uploadUrl: "https://r2.example/p", headers: {} } });
-      return new Response("SignatureDoesNotMatch", { status: 403 });
+      return json(200, { success: true, error: null, data: { uploadId: "t", uploadUrl: "https://r2.example/p", headers: {} } });
     }));
     const { portalApi } = await import("./api");
     const err = await portalApi.campaigns.uploadCoverImage("tok", file()).catch((e) => e);
     expect(err.code).toBe("UPLOAD_FAILED");
+    expect(urls.some((u) => u.endsWith("/complete"))).toBe(false);
+  });
+
+  it("a dropped connection during the storage upload says so, and complete is never called", async () => {
+    const urls: string[] = [];
+    fakeXhr(0, { networkError: true });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      return json(200, { success: true, error: null, data: { uploadId: "t", uploadUrl: "https://r2.example/p", headers: {} } });
+    }));
+    const { portalApi } = await import("./api");
+    const err = await portalApi.campaigns.uploadCoverImage("tok", file()).catch((e) => e);
+    expect(err.code).toBe("NETWORK_ERROR");
+    expect(err.message).toMatch(/upload the file to storage/);
     expect(urls.some((u) => u.endsWith("/complete"))).toBe(false);
   });
 

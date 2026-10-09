@@ -89,6 +89,8 @@ export function RulePointsEditor({
                   {index + 1}
                 </span>
                 <input
+                  name="campaign-rule-point"
+                  autoComplete="off"
                   type="text"
                   value={point.text}
                   placeholder={placeholder}

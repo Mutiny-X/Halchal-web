@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Eye, TrendingUp, UserPlus } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
 import {
   CampaignWizardFooter,
@@ -16,9 +16,10 @@ import {
   formatEstimatedViews,
 } from "@/features/campaigns/lib/estimate-views";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
+import { validateMoneyFields } from "@/features/campaigns/lib/campaign-payload";
+import { checkoutTotals, PLATFORM_FEE_RATE } from "@/features/campaigns/lib/pricing";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
 
-const PLATFORM_FEE_RATE = 0.15;
 
 function formatRupees(value: number): string {
   if (!Number.isFinite(value)) return "₹0";
@@ -44,21 +45,23 @@ function SummaryLine({ label, value, bold }: { label: string; value: string; bol
 }
 
 export function CampaignPayoutPage() {
-  const navigate = useNavigate();
   const { goBack, backLabel } = useWizardBack();
-  const { draft, paths, update, saveNow } = useCampaignWizard();
+  const { draft, update, goToStep } = useCampaignWizard();
+  const { toast } = useToast();
+  const errors = validateMoneyFields(draft);
 
   const rate = Number(draft.ratePer1kRupees);
   const maxPayout = Number(draft.maxPayoutRupees);
   const budget = Number(draft.budgetRupees);
   const estimatedViews = estimateViewsFromBudget(budget, rate);
   const minClippersNeeded = estimateMinClippersNeeded(budget, maxPayout);
-  const platformFee = Number.isFinite(budget) ? budget * PLATFORM_FEE_RATE : 0;
-  const totalCheckout = Number.isFinite(budget) ? budget + platformFee : 0;
+  const { platformFee, total: totalCheckout } = checkoutTotals(budget);
 
-  const rateValid = Number.isFinite(rate) && rate > 0;
-  const maxPayoutValid = Number.isFinite(maxPayout) && maxPayout >= 1000;
-  const budgetValid = Number.isFinite(budget) && maxPayoutValid && budget >= maxPayout;
+  // Same rules the Review step and the API apply — an empty or invalid
+  // amount is an error here, never silently replaced by a default.
+  const rateValid = errors.rate === null;
+  const maxPayoutValid = errors.maxPayout === null;
+  const budgetValid = errors.budget === null;
 
   const canContinue = rateValid && maxPayoutValid && budgetValid;
 
@@ -83,6 +86,8 @@ export function CampaignPayoutPage() {
                   </label>
                   <p className="-mt-1.5 text-xs text-muted">₹ per 1,000 valid views.</p>
                   <Input
+                    name="campaign-rate"
+                    autoComplete="off"
                     id="rate"
                     type="number"
                     min={1}
@@ -90,7 +95,7 @@ export function CampaignPayoutPage() {
                     onChange={(e) => update({ ratePer1kRupees: e.target.value })}
                     className={!rateValid ? "border-destructive/50" : undefined}
                   />
-                  {!rateValid && <FieldError>Enter a rate greater than ₹0.</FieldError>}
+                  {errors.rate && <FieldError>{errors.rate}</FieldError>}
                 </div>
 
                 <div className="space-y-2">
@@ -99,6 +104,8 @@ export function CampaignPayoutPage() {
                   </label>
                   <p className="-mt-1.5 text-xs text-muted">Cap per creator.</p>
                   <Input
+                    name="campaign-max-payout"
+                    autoComplete="off"
                     id="max"
                     type="number"
                     min={1000}
@@ -106,7 +113,7 @@ export function CampaignPayoutPage() {
                     onChange={(e) => update({ maxPayoutRupees: e.target.value })}
                     className={!maxPayoutValid ? "border-destructive/50" : undefined}
                   />
-                  {!maxPayoutValid && <FieldError>Must be at least ₹1,000.</FieldError>}
+                  {errors.maxPayout && <FieldError>{errors.maxPayout}</FieldError>}
                 </div>
               </div>
 
@@ -116,6 +123,8 @@ export function CampaignPayoutPage() {
                 </label>
                 <p className="-mt-1.5 text-xs text-muted">Total campaign budget.</p>
                 <Input
+                  name="campaign-budget"
+                  autoComplete="off"
                   id="budget"
                   type="number"
                   min={1000}
@@ -123,17 +132,13 @@ export function CampaignPayoutPage() {
                   onChange={(e) => update({ budgetRupees: e.target.value })}
                   className={cn("max-w-[280px]", !budgetValid && "border-destructive/50")}
                 />
-                {!budgetValid && maxPayoutValid && (
-                  <FieldError>
-                    Budget must be at least the max payout per creator ({formatRupees(maxPayout)}).
-                  </FieldError>
-                )}
+                {errors.budget && <FieldError>{errors.budget}</FieldError>}
               </div>
 
               <div className="rounded-xl border border-border bg-surface p-4">
                 <div className="space-y-1 divide-y divide-border/70">
                   <SummaryLine label="Budget pool" value={formatRupees(budget || 0)} />
-                  <SummaryLine label="Platform fee (15%)" value={formatRupees(platformFee)} />
+                  <SummaryLine label={`Platform fee (${PLATFORM_FEE_RATE * 100}%)`} value={formatRupees(platformFee)} />
                   <SummaryLine label="Total checkout" value={formatRupees(totalCheckout)} bold />
                 </div>
                 <p className="mt-3 text-xs text-muted">
@@ -183,7 +188,9 @@ export function CampaignPayoutPage() {
                 id: "next",
                 label: "Next: Review",
                 onClick: () => {
-                  void saveNow("review").then(() => navigate(paths.review));
+                  void goToStep("review").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: { size: "sm", disabled: !canContinue },

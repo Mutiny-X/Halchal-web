@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Plus, WandSparkles } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -19,12 +19,19 @@ import { ApiError, type Campaign, type CampaignStatusFilter } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { usePortalRole } from "@/providers/auth-provider";
 
+const STATUS_FILTERS: CampaignStatusFilter[] = ["all", "draft", "pending_review", "live", "paused", "closed"];
+
 export function CampaignsPage() {
   const role = usePortalRole();
   const isAdmin = role === "admin";
   const base = isAdmin ? "/admin/campaigns" : "/campaigns";
   const { toast } = useToast();
-  const [statusFilter, setStatusFilter] = useState<CampaignStatusFilter>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusFilter: CampaignStatusFilter = STATUS_FILTERS.includes(searchParams.get("status") as CampaignStatusFilter)
+    ? (searchParams.get("status") as CampaignStatusFilter)
+    : "all";
+  const setStatusFilter = (value: CampaignStatusFilter) =>
+    setSearchParams(value === "all" ? {} : { status: value }, { replace: true });
   const [pendingAction, setPendingAction] = useState<{
     campaign: Campaign;
     action: CampaignMenuAction;
@@ -54,7 +61,14 @@ export function CampaignsPage() {
           id: pendingAction.campaign.id,
           status: pendingAction.action.status,
         });
-        toast("Campaign updated.", "success");
+        toast(
+          pendingAction.action.status === "pending_review"
+            ? "Submitted for approval. We'll notify you when it's reviewed."
+            : pendingAction.action.status === "draft"
+              ? "Withdrawn. You can edit it again."
+              : "Campaign updated.",
+          "success",
+        );
       }
       setPendingAction(null);
     } catch (error) {
@@ -130,14 +144,14 @@ export function CampaignsPage() {
         title={
           pendingAction?.action.kind === "delete"
             ? "Delete campaign?"
-            : "Update campaign status?"
+            : `${pendingAction?.action.title ?? "Update"}: ${pendingAction?.campaign.title ?? ""}`
         }
         description={
           pendingAction?.action.kind === "delete"
             ? "This cannot be undone. Only draft or closed campaigns without submissions can be deleted."
-            : `Change "${pendingAction?.campaign.title}" to ${pendingAction?.action.status}?`
+            : (pendingAction?.action.description ?? "")
         }
-        confirmLabel={pendingAction?.action.kind === "delete" ? "Delete" : "Confirm"}
+        confirmLabel={pendingAction?.action.kind === "delete" ? "Delete" : (pendingAction?.action.confirmLabel ?? "Confirm")}
         variant={pendingAction?.action.kind === "delete" ? "destructive" : "default"}
         loading={isConfirmLoading}
         onConfirm={() => void confirmPendingAction()}

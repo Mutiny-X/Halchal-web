@@ -1,4 +1,5 @@
 import type { Portal } from "./portal";
+import { fileContentType } from "@/features/campaigns/lib/upload-rules";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -31,10 +32,59 @@ export class ApiError extends Error {
   constructor(
     public code: string,
     message: string,
+    /** HTTP status when there was a response; undefined when the request
+     * never reached the server. */
+    public status?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+const NETWORK_ERROR_MESSAGE =
+  "Can't reach the server. Check your connection and try again.";
+const SERVER_UNAVAILABLE_MESSAGE =
+  "The server is temporarily unavailable. Please try again in a moment.";
+
+/** fetch + JSON parse that never throws a raw TypeError/SyntaxError: no
+ * network becomes NETWORK_ERROR, and a non-JSON reply (a proxy's 502 HTML
+ * page, say) comes back as `body: null` for the caller to classify. */
+async function sendRequest(
+  url: string,
+  init: RequestInit,
+): Promise<{ res: Response; body: ApiEnvelope<unknown> | null }> {
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
+  }
+  let body: ApiEnvelope<unknown> | null = null;
+  try {
+    body = (await res.json()) as ApiEnvelope<unknown>;
+  } catch {
+    body = null;
+  }
+  return { res, body };
+}
+
+function toApiError(res: Response, body: ApiEnvelope<unknown> | null): ApiError {
+  if (!body || typeof body !== "object" || !("success" in body)) {
+    return res.status >= 500
+      ? new ApiError("SERVER_UNAVAILABLE", SERVER_UNAVAILABLE_MESSAGE, res.status)
+      : new ApiError("INTERNAL_ERROR", `Request failed (HTTP ${res.status})`, res.status);
+  }
+  // An admin-set password is only good for choosing a new one: the API closes
+  // every other route until it's changed, so take the person to where they can.
+  if (body.error?.code === "PASSWORD_CHANGE_REQUIRED" && typeof window !== "undefined") {
+    const target = window.location.pathname.startsWith("/admin") ? "/admin/profile" : "/staff/profile";
+    if (window.location.pathname !== target) window.location.assign(target);
+  }
+  return new ApiError(
+    body.error?.code ?? "INTERNAL_ERROR",
+    body.error?.message ?? "Request failed",
+    res.status,
+  );
 }
 
 type ApiAuthHandlers = {
@@ -43,37 +93,53 @@ type ApiAuthHandlers = {
   onSessionExpired: () => void;
 };
 
+/** Only a real refusal from the server ends the session. A dropped
+ * connection or a server hiccup during the refresh says nothing about the
+ * token, so the user stays signed in (and keeps any unsaved work). */
+type RefreshOutcome =
+  | { kind: "refreshed"; accessToken: string }
+  | { kind: "expired" }
+  | { kind: "unavailable" };
+
 let apiAuthHandlers: ApiAuthHandlers | null = null;
-let refreshInFlight: Promise<string | null> | null = null;
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
 export function registerApiAuthHandlers(handlers: ApiAuthHandlers): void {
   apiAuthHandlers = handlers;
 }
 
-async function refreshAccessToken(): Promise<string | null> {
-  if (!apiAuthHandlers) return null;
+async function refreshAccessToken(): Promise<RefreshOutcome> {
+  if (!apiAuthHandlers) return { kind: "expired" };
 
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
+    refreshInFlight = (async (): Promise<RefreshOutcome> => {
       const refreshToken = apiAuthHandlers!.getRefreshToken();
-      if (!refreshToken) return null;
+      if (!refreshToken) {
+        apiAuthHandlers!.onSessionExpired();
+        return { kind: "expired" };
+      }
 
       try {
-        const res = await fetch(`${API_BASE}/auth/refresh`, {
+        const { res, body } = await sendRequest(`${API_BASE}/auth/refresh`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ refreshToken }),
         });
-        const body = (await res.json()) as ApiEnvelope<AuthResponse>;
-        if (!res.ok || !body.success || !body.data) {
-          apiAuthHandlers!.onSessionExpired();
-          return null;
+        const session = (body as ApiEnvelope<AuthResponse> | null)?.data;
+        if (res.ok && body?.success && session) {
+          apiAuthHandlers!.onSessionRefreshed(session);
+          return { kind: "refreshed", accessToken: session.tokens.accessToken };
         }
-        apiAuthHandlers!.onSessionRefreshed(body.data);
-        return body.data.tokens.accessToken;
+        // The server answered and refused the refresh token: that's a real
+        // expiry. Anything else — 5xx, a proxy page, 429 rate limiting — is
+        // temporary and must not sign the user out.
+        if (body && (res.status === 400 || res.status === 401 || res.status === 403)) {
+          apiAuthHandlers!.onSessionExpired();
+          return { kind: "expired" };
+        }
+        return { kind: "unavailable" };
       } catch {
-        apiAuthHandlers!.onSessionExpired();
-        return null;
+        return { kind: "unavailable" };
       } finally {
         refreshInFlight = null;
       }
@@ -102,87 +168,95 @@ async function authedFetch<T>(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  const body = (await res.json()) as ApiEnvelope<T>;
+  const { res, body } = await sendRequest(`${API_BASE}${path}`, { ...init, headers });
 
   if (
     res.status === 401 &&
-    body.error?.code === "UNAUTHORIZED" &&
+    body?.error?.code === "UNAUTHORIZED" &&
     accessToken &&
     !_retried &&
     apiAuthHandlers
   ) {
-    const nextToken = await refreshAccessToken();
-    if (nextToken) {
+    const outcome = await refreshAccessToken();
+    if (outcome.kind === "refreshed") {
       return authedFetch<T>(path, {
         ...options,
-        accessToken: nextToken,
+        accessToken: outcome.accessToken,
         _retried: true,
       });
     }
+    if (outcome.kind === "unavailable") {
+      throw new ApiError(
+        "NETWORK_ERROR",
+        "Couldn't refresh your session — check your connection and try again. You're still signed in.",
+      );
+    }
+    throw new ApiError("UNAUTHORIZED", "Your session expired. Please log in again.", 401);
   }
 
-  if (!res.ok || !body.success || body.data === null) {
-    throw new ApiError(
-      body.error?.code ?? "INTERNAL_ERROR",
-      body.error?.message ?? "Request failed",
-    );
+  if (!res.ok || !body?.success || body.data === null) {
+    throw toApiError(res, body);
   }
 
-  return body.data;
+  return body.data as T;
 }
 
 export async function apiFetchPublic<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const { res, body } = await sendRequest(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
   });
-  const body = (await res.json()) as ApiEnvelope<T>;
-  if (!res.ok || !body.success || body.data === null) {
-    throw new ApiError(
-      body.error?.code ?? "INTERNAL_ERROR",
-      body.error?.message ?? "Request failed",
-    );
+  if (!res.ok || !body?.success || body.data === null) {
+    throw toApiError(res, body);
   }
-  return body.data;
+  return body.data as T;
 }
 
-/** For endpoints that return a raw file (e.g. a generated PDF) instead of
- * the standard {success, data, error} JSON envelope — authedFetch/apiFetch
- * always call res.json(), which would fail on a binary response. Only
- * handles the one-shot case (no 401-refresh-retry): an admin clicking a
- * "download" button with an expired session will see a clear error and can
- * just retry after their session refreshes on their next normal request. */
+/** A file download (PDF, CSV) from an authenticated route. Same session
+ * handling as every other call: an expired access token is renewed once
+ * and the request retried, so a download after a quiet spell just works. */
 export async function apiFetchBlob(
   path: string,
-  options: RequestInit & { accessToken?: string } = {},
+  options: RequestInit & { accessToken?: string; _retried?: boolean } = {},
 ): Promise<Blob> {
-  const { accessToken, ...init } = options;
+  const { accessToken, _retried, ...init } = options;
   const headers = new Headers(init.headers);
-  if (accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
-  }
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  if (!res.ok) {
-    let code = "INTERNAL_ERROR";
-    let message = "Request failed";
-    try {
-      const body = (await res.json()) as ApiEnvelope<unknown>;
-      code = body.error?.code ?? code;
-      message = body.error?.message ?? message;
-    } catch {
-      // Response wasn't JSON (unexpected for an error) — fall back to the generic message.
-    }
-    throw new ApiError(code, message);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch {
+    throw new ApiError("NETWORK_ERROR", NETWORK_ERROR_MESSAGE);
   }
-  return res.blob();
+  if (res.ok) return res.blob();
+
+  let body: ApiEnvelope<unknown> | null = null;
+  try {
+    body = (await res.json()) as ApiEnvelope<unknown>;
+  } catch {
+    body = null;
+  }
+  if (res.status === 401 && body?.error?.code === "UNAUTHORIZED" && accessToken && !_retried && apiAuthHandlers) {
+    const outcome = await refreshAccessToken();
+    if (outcome.kind === "refreshed") {
+      return apiFetchBlob(path, { ...init, accessToken: outcome.accessToken, _retried: true });
+    }
+    if (outcome.kind === "unavailable") {
+      throw new ApiError(
+        "NETWORK_ERROR",
+        "Couldn't refresh your session — check your connection and try again. You're still signed in.",
+      );
+    }
+    throw new ApiError("UNAUTHORIZED", "Your session expired. Please log in again.", 401);
+  }
+  throw toApiError(res, body);
 }
 
 /** Triggers a browser "Save As" for a blob without navigating away from the
@@ -196,7 +270,8 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Give the browser a moment to start the save before the URL goes away.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function apiFetch<T>(
@@ -219,6 +294,136 @@ export async function apiFetchForm<T>(
   });
 }
 
+export type DirectUploadPurpose =
+  | "campaign-cover"
+  | "campaign-asset"
+  | "campaign-source"
+  | "brand-logo"
+  | "admin-brand-logo"
+  | "avatar"
+  | "admin-draft-copy";
+
+export type DirectUploadResult = {
+  url: string;
+  path: string;
+  name: string;
+  type: "image" | "video";
+  contentType: string;
+};
+
+/**
+ * Every file a brand/staff/admin uploads goes browser → R2 directly:
+ *  1. the API signs a PUT for this exact file (type + byte size),
+ *  2. the browser sends the bytes straight to storage,
+ *  3. the API checks the first few KB and moves it into place.
+ * The file never passes through the API server. `legacy` is only used when
+ * the server has no object storage (local development).
+ */
+/** Where an upload is: sending bytes to storage, then the server checking
+ * the file (a video's check can take a few seconds). */
+export type UploadProgress =
+  | { phase: "uploading"; loaded: number; total: number; percent: number; bytesPerSecond: number | null; secondsLeft: number | null }
+  | { phase: "checking" };
+export type OnUploadProgress = (progress: UploadProgress) => void;
+
+/** PUT with progress events (fetch can't report upload progress). */
+function putWithProgress(
+  url: string,
+  file: File,
+  headers: Record<string, string>,
+  onProgress?: OnUploadProgress,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    const started = Date.now();
+    let lastEmit = 0;
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const now = Date.now();
+      if (now - lastEmit < 200 && event.loaded < event.total) return; // ~5 updates/second
+      lastEmit = now;
+      const total = event.lengthComputable ? event.total : file.size;
+      const elapsed = (now - started) / 1000;
+      const bytesPerSecond = elapsed >= 1 && event.loaded > 0 ? event.loaded / elapsed : null;
+      onProgress({
+        phase: "uploading",
+        loaded: event.loaded,
+        total,
+        percent: total > 0 ? Math.min(100, Math.floor((event.loaded / total) * 100)) : 0,
+        bytesPerSecond,
+        secondsLeft: bytesPerSecond ? Math.max(0, Math.round((total - event.loaded) / bytesPerSecond)) : null,
+      });
+    };
+    xhr.onload = () => resolve(xhr.status);
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.onabort = () => reject(new Error("aborted"));
+    xhr.send(file);
+  });
+}
+
+async function uploadDirect<T extends object = object>(
+  token: string,
+  file: File,
+  purpose: DirectUploadPurpose,
+  opts: { deliverableId?: string; legacy?: () => Promise<DirectUploadResult & T>; onProgress?: OnUploadProgress } = {},
+): Promise<DirectUploadResult & T> {
+  let presign: { uploadId: string; uploadUrl: string; headers: Record<string, string> };
+  try {
+    presign = await apiFetch("/uploads/direct/presign", {
+      method: "POST",
+      accessToken: token,
+      body: JSON.stringify({
+        purpose,
+        contentType: fileContentType(file),
+        size: file.size,
+        fileName: file.name,
+        deliverableId: opts.deliverableId,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "DIRECT_UPLOAD_UNAVAILABLE" && opts.legacy) {
+      return opts.legacy();
+    }
+    throw error;
+  }
+
+  opts.onProgress?.({ phase: "uploading", loaded: 0, total: file.size, percent: 0, bytesPerSecond: null, secondsLeft: null });
+  let putStatus: number;
+  try {
+    putStatus = await putWithProgress(presign.uploadUrl, file, presign.headers, opts.onProgress);
+  } catch {
+    // The API answered the step before, so this is the browser → storage
+    // leg (connection dropped, or storage refusing this site).
+    throw new ApiError("NETWORK_ERROR", "Couldn't upload the file to storage. Check your connection and try again.");
+  }
+  if (putStatus < 200 || putStatus >= 300) {
+    throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putStatus}) — please try again.`, putStatus);
+  }
+  opts.onProgress?.({ phase: "checking" });
+
+  return apiFetch<DirectUploadResult & T>("/uploads/direct/complete", {
+    method: "POST",
+    accessToken: token,
+    body: JSON.stringify({ uploadId: presign.uploadId }),
+  });
+}
+
+const asResult = (r: { url: string; path?: string; name?: string; type?: "image" | "video" }, file: File): DirectUploadResult => ({
+  url: r.url,
+  path: r.path ?? r.url,
+  name: r.name ?? file.name,
+  type: r.type ?? (fileContentType(file).startsWith("video/") ? "video" : "image"),
+  contentType: fileContentType(file),
+});
+
+function legacyForm<T>(path: string, token: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetchForm<T>(path, { method: "POST", accessToken: token, body: form });
+}
+
 type RegisterPayload = {
   email: string;
   password: string;
@@ -229,55 +434,6 @@ type RegisterPayload = {
 
 export type PublicReferenceAsset = { type: "image" | "video"; url: string; label?: string };
 export type PublicSourceAsset = { type: "drive" | "youtube"; url: string; label?: string };
-
-export type PublicCampaign = {
-  id: string;
-  title: string;
-  category: string | null;
-  platform: string;
-  platforms: string[];
-  locationType: "pan_india" | "states";
-  targetStates: string[];
-  status: string;
-  brief: string;
-  briefHook: string | null;
-  doRules: string | null;
-  avoidRules: string | null;
-  sourceAssets: PublicSourceAsset[] | null;
-  referenceAssets: PublicReferenceAsset[] | null;
-  coverImageUrl: string | null;
-  productUrl: string | null;
-  startDate: string | null;
-  brandCompanyName: string | null;
-  brandLogoUrl: string | null;
-};
-
-export type PublicDeliverableListItem = {
-  id: string;
-  platform: string;
-  status: string;
-  draftDriveUrl: string | null;
-  livePostUrl: string | null;
-  rejectionReason: string | null;
-  draftSubmittedAt: string | null;
-  participationId: string;
-  joinedAt: string;
-  creatorName: string;
-  priorRejectionCount: number;
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  shareCount: number;
-  estimatedPaise: number;
-  siblingDeliverables: Array<{ id: string; platform: string; status: string }>;
-};
-
-export const publicApi = {
-  campaign: (id: string) =>
-    apiFetchPublic<PublicCampaign>(`/public/campaigns/${id}`),
-  deliverables: (id: string) =>
-    apiFetchPublic<PublicDeliverableListItem[]>(`/public/campaigns/${id}/deliverables`),
-};
 
 export const authApi = {
   register: (payload: RegisterPayload) =>
@@ -370,9 +526,16 @@ export type Campaign = {
   poolRemainingPercent: number;
   newClipperIntakeStatus: "open" | "closed_at_threshold" | "manually_extended";
   startDate: string | null;
+  /** Set while the campaign waits for admin approval. */
+  submittedForReviewAt?: string | null;
+  /** Why an admin sent it back (cleared when it's submitted again). */
+  reviewRejectionReason?: string | null;
+  reviewedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   submissionCount?: number;
+  /** "view" for a view-only team member: they can look, not change. */
+  viewerAccess?: "full" | "view";
   brandCompanyName?: string | null;
   pendingInviteEmail?: string | null;
 };
@@ -384,7 +547,7 @@ export type PaginatedCampaigns = {
   limit: number;
 };
 
-export type CampaignStatusFilter = "all" | "draft" | "live" | "paused" | "closed";
+export type CampaignStatusFilter = "all" | "draft" | "pending_review" | "live" | "paused" | "closed";
 
 export type SubmissionListItem = {
   id: string;
@@ -415,12 +578,31 @@ export type CreatorProfileSnippet = {
   avatarUrl: string | null;
 };
 
+/** One approve / reject on a clip, with who did it. */
+export type ReviewTrailEntry = {
+  step: "work_approved" | "work_rejected" | "proof_approved" | "proof_rejected";
+  byName: string;
+  byRole: "admin" | "team";
+  at: string;
+  reason: string | null;
+};
+
 export type DeliverableListItem = {
   id: string;
   platform: string;
   status: string;
   draftDriveUrl: string | null;
   draftSubmittedAt: string | null;
+  draftReviewedAt: string | null;
+  livePostUrl: string | null;
+  liveSubmittedAt: string | null;
+  proofReviewedAt: string | null;
+  /** The latest rejection's reason — for the step the status says was rejected. */
+  rejectionReason: string | null;
+  paidAt: string | null;
+  /** Latest decision on the work / on the proof. */
+  workReviewedBy?: ReviewTrailEntry | null;
+  proofReviewedBy?: ReviewTrailEntry | null;
   campaignId: string;
   campaignTitle: string;
   participationId: string;
@@ -454,6 +636,11 @@ export type DeliverableDetail = {
   liveSubmittedAt: string | null;
   proofReviewedAt: string | null;
   participationId: string;
+  /** Every approve / reject on this clip, oldest first. */
+  reviewTrail?: ReviewTrailEntry[];
+  workReviewedBy?: ReviewTrailEntry | null;
+  proofReviewedBy?: ReviewTrailEntry | null;
+  paidAt?: string | null;
   rejectionHistory: RejectionHistoryEvent[];
   campaign: { id: string; title: string; status: string; ratePer1kDisplay: string; budgetPaise: number };
   viewCount: number;
@@ -642,6 +829,83 @@ export type AdminCreatorInstagramConnection = {
   lastSyncedAt: string;
 };
 
+export type InsightKeyValue = { key: string; value: number };
+export type InsightDemographics = {
+  age: InsightKeyValue[] | null;
+  gender: InsightKeyValue[] | null;
+  country: InsightKeyValue[] | null;
+  city: InsightKeyValue[] | null;
+};
+export type InsightContentKind = "reel" | "carousel" | "photo" | "video" | "story";
+export type InsightPostMetrics = {
+  views?: number;
+  reach?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+  totalInteractions?: number;
+  avgWatchTimeMs?: number;
+  totalWatchTimeMs?: number;
+  profileVisits?: number;
+  follows?: number;
+};
+/** Everything Instagram's Insights API reports for a connected account. */
+export type InstagramAccountInsights = {
+  connectionId: string;
+  syncedAt: string;
+  period: { since: string; until: string; days: number };
+  profile: {
+    username: string;
+    name: string | null;
+    biography: string | null;
+    website: string | null;
+    profilePictureUrl: string | null;
+    accountType: string | null;
+    followerCount: number;
+    followsCount: number;
+    mediaCount: number;
+  };
+  overview: {
+    totals: {
+      views: number | null;
+      reach: number | null;
+      accountsEngaged: number | null;
+      totalInteractions: number | null;
+      likes: number | null;
+      comments: number | null;
+      shares: number | null;
+      saves: number | null;
+      replies: number | null;
+      profileLinksTaps: number | null;
+      follows: number | null;
+      unfollows: number | null;
+    };
+    viewsByFormat: InsightKeyValue[] | null;
+    reachByFormat: InsightKeyValue[] | null;
+    reachByFollowType: InsightKeyValue[] | null;
+    profileLinkTaps: InsightKeyValue[] | null;
+    followerGrowth: { points: Array<{ date: string; value: number }>; net: number } | null;
+  };
+  audience: { followers: InsightDemographics; engaged: InsightDemographics };
+  content: {
+    mix: Array<{ kind: InsightContentKind; count: number }>;
+    analysedPosts: number;
+    posts: Array<{
+      id: string;
+      kind: InsightContentKind;
+      permalink: string | null;
+      caption: string | null;
+      thumbnailUrl: string | null;
+      timestamp: string | null;
+      childCount: number | null;
+      metrics: InsightPostMetrics;
+      engagementByReach: number | null;
+    }>;
+  };
+  unavailable: Array<{ section: string; reason: "permission" | "threshold" | "not_supported" | "error"; message: string }>;
+};
+
 export type AdminCreatorDetail = {
   id: string;
   displayName: string | null;
@@ -691,6 +955,7 @@ export type StaffBrand = {
   companyEmail: string | null;
   campaignCount: number;
   assignedAt: string;
+  accessLevel?: StaffAccessLevel;
 };
 
 export type StaffAccessLevel = "view_only" | "full";
@@ -813,33 +1078,10 @@ export type WithdrawalImportResult = {
   }[];
 };
 
-export type AdminRole = {
-  id: string;
-  name: string;
-  canSeeMoney: boolean;
-  userCount: number;
-  permissions: { section: AdminSection; level: AdminPermissionLevel }[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type AdminRolesList = {
-  superAdmin: { userCount: number };
-  roles: AdminRole[];
-};
-
 export type EffectiveAdminPermissions = {
   isSuperAdmin: boolean;
   canSeeMoney: boolean;
   sections: Record<AdminSection, AdminPermissionLevel>;
-};
-
-export type AdminAccount = {
-  id: string;
-  name: string;
-  email: string | null;
-  adminRoleId: string | null;
-  adminRoleName: string;
 };
 
 export type Faq = {
@@ -928,74 +1170,31 @@ const campaignsApi = {
       method: "DELETE",
       accessToken: token,
     }),
-  uploadReferenceAsset: (token: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ url: string; path?: string; type: "image" | "video"; name: string }>(
-      "/campaigns/reference-assets/upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
-      },
-    );
-  },
-  // Direct-to-R2 alternative to uploadReferenceAsset above, for files too
-  // large to safely send through the API server (that route buffers the
-  // whole file in the backend's process memory before forwarding it to
-  // R2 — fine up to its 2GB limit, risky well beyond it). Gets a
-  // presigned URL from the backend, then PUTs the file straight to R2
-  // from the browser — the API server never sees the bytes, so size is
-  // bounded only by R2's own 5GB single-PUT ceiling, not backend memory.
-  // Trade-off: unlike uploadReferenceAsset, the backend can't validate
-  // the video is actually playable before accepting it, since the bytes
-  // never pass through there.
-  uploadReferenceAssetDirect: async (
-    token: string,
-    file: File,
-  ): Promise<{ url: string; type: "image" | "video"; name: string }> => {
-    const { uploadUrl, publicUrl } = await apiFetch<{ uploadUrl: string; publicUrl: string }>(
-      "/campaigns/reference-assets/presign-upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: JSON.stringify({ fileName: file.name, contentType: file.type }),
-      },
-    );
-
-    const putRes = await fetch(uploadUrl, {
-      method: "PUT",
-      body: file,
-      headers: { "Content-Type": file.type },
-    });
-    if (!putRes.ok) {
-      throw new ApiError("UPLOAD_FAILED", `Upload to storage failed (HTTP ${putRes.status})`);
-    }
-
-    return {
-      url: publicUrl,
-      type: file.type.startsWith("video/") ? "video" : "image",
-      name: file.name,
-    };
-  },
+  /** Sample content and source files, up to 4.9 GB (R2 single-upload ceiling) — straight to R2. */
+  uploadReferenceAsset: (token: string, file: File, onProgress?: OnUploadProgress) =>
+    uploadDirect(token, file, "campaign-asset", {
+      onProgress,
+      legacy: async () =>
+        asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
+    }),
+  /** "Upload from device" source files — up to 3 GB, straight to R2. */
+  uploadSourceAsset: (token: string, file: File, onProgress?: OnUploadProgress) =>
+    uploadDirect(token, file, "campaign-source", {
+      onProgress,
+      legacy: async () =>
+        asResult(await legacyForm<{ url: string; path?: string; type: "image" | "video"; name: string }>("/campaigns/reference-assets/upload", token, file), file),
+    }),
   checkSourceAssetUrl: (token: string, url: string) =>
     apiFetch<{ fetchable: boolean; reason?: string }>("/campaigns/source-assets/check-url", {
       method: "POST",
       accessToken: token,
       body: JSON.stringify({ url }),
     }),
-  uploadCoverImage: (token: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ url: string; path?: string; name: string }>(
-      "/campaigns/cover/upload",
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
-      },
-    );
-  },
+  uploadCoverImage: (token: string, file: File, onProgress?: OnUploadProgress) =>
+    uploadDirect(token, file, "campaign-cover", {
+      onProgress,
+      legacy: async () => asResult(await legacyForm<{ url: string; path?: string; name: string }>("/campaigns/cover/upload", token, file), file),
+    }),
 };
 
 const submissionsApi = {
@@ -1020,18 +1219,19 @@ const submissionsApi = {
         body: JSON.stringify(body),
       },
     ),
-  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiFetchForm<{ id: string; adminUploadedDraftUrl: string }>(
-      `/submissions/deliverables/${deliverableId}/admin-draft-copy`,
-      {
-        method: "POST",
-        accessToken: token,
-        body: formData,
+  uploadAdminDraftCopy: (token: string, deliverableId: string, file: File, onProgress?: OnUploadProgress) =>
+    uploadDirect<{ id: string; adminUploadedDraftUrl: string }>(token, file, "admin-draft-copy", {
+      deliverableId,
+      onProgress,
+      legacy: async () => {
+        const r = await legacyForm<{ id: string; adminUploadedDraftUrl: string }>(
+          `/submissions/deliverables/${deliverableId}/admin-draft-copy`,
+          token,
+          file,
+        );
+        return { ...asResult({ url: r.adminUploadedDraftUrl }, file), ...r };
       },
-    );
-  },
+    }),
   approveProof: (token: string, deliverableId: string) =>
     apiFetch<{ id: string; status: string }>(
       `/submissions/deliverables/${deliverableId}/approve-proof`,
@@ -1136,25 +1336,16 @@ export const portalApi = {
       accessToken: token,
     }),
 
-  uploadBrandLogo: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/users/me/brand-logo", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
+  uploadBrandLogo: (token: string, file: File) =>
+    uploadDirect(token, file, "brand-logo", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/users/me/brand-logo", token, file), file),
+    }),
 
-  uploadAvatar: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/users/me/avatar", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
+  /** Also sets the caller's profile photo (server-side, on completion). */
+  uploadAvatar: (token: string, file: File) =>
+    uploadDirect(token, file, "avatar", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/users/me/avatar", token, file), file),
+    }),
 
   stats: (token: string) =>
     apiFetch<BrandStats>("/submissions/stats", { accessToken: token }),
@@ -1174,6 +1365,10 @@ export type CampaignPayoutDeliverable = {
 
 export type CampaignCreatorPayout = {
   creatorId: string;
+  /** One payout row per profile — a creator's two profiles are two rows. */
+  creatorProfileId: string;
+  handle: string;
+  platform: string;
   creatorName: string;
   deliverables: CampaignPayoutDeliverable[];
   totalApprovedPaise: number;
@@ -1240,6 +1435,20 @@ export const adminApi = {
 
   creator: (token: string, id: string) =>
     apiFetch<AdminCreatorDetail>(`/admin/creators/${id}`, { accessToken: token }),
+
+  /** Blocks a creator's account: no sign-in, every session ended. */
+  suspendCreator: (token: string, id: string, reason?: string) =>
+    apiFetch<{ suspended: boolean }>(`/admin/creators/${id}/suspend`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      accessToken: token,
+    }),
+
+  reinstateCreator: (token: string, id: string) =>
+    apiFetch<{ reinstated: boolean }>(`/admin/creators/${id}/reinstate`, {
+      method: "POST",
+      accessToken: token,
+    }),
 
   reviewKyc: (token: string, id: string, action: "approve" | "reject", reason?: string) =>
     apiFetch<{ id: string; kycStatus: KycStatus }>(`/admin/creators/${id}/kyc-review`, {
@@ -1337,71 +1546,10 @@ export const adminApi = {
   myPermissions: (token: string) =>
     apiFetch<EffectiveAdminPermissions>("/admin/me/permissions", { accessToken: token }),
 
-  roles: (token: string) => apiFetch<AdminRolesList>("/admin/roles", { accessToken: token }),
-
-  createRole: (token: string, body: { name: string; canSeeMoney?: boolean }) =>
-    apiFetch<AdminRole>("/admin/roles", {
-      method: "POST",
-      body: JSON.stringify(body),
-      accessToken: token,
+  uploadBrandLogo: (token: string, file: File) =>
+    uploadDirect(token, file, "admin-brand-logo", {
+      legacy: async () => asResult(await legacyForm<{ url: string }>("/admin/brand-logo", token, file), file),
     }),
-
-  updateRole: (token: string, id: string, body: { name?: string; canSeeMoney?: boolean }) =>
-    apiFetch<AdminRole>(`/admin/roles/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-      accessToken: token,
-    }),
-
-  deleteRole: (token: string, id: string) =>
-    apiFetch<{ deleted: boolean }>(`/admin/roles/${id}`, {
-      method: "DELETE",
-      accessToken: token,
-    }),
-
-  setRolePermissions: (
-    token: string,
-    id: string,
-    permissions: { section: AdminSection; level: AdminPermissionLevel }[],
-  ) =>
-    apiFetch<AdminRole>(`/admin/roles/${id}/permissions`, {
-      method: "PATCH",
-      body: JSON.stringify({ permissions }),
-      accessToken: token,
-    }),
-
-  resetRoles: (token: string) =>
-    apiFetch<AdminRolesList>("/admin/roles/reset", { method: "PATCH", accessToken: token }),
-
-  assignAdminRole: (token: string, userId: string, adminRoleId: string | null) =>
-    apiFetch<{ id: string; adminRoleId: string | null }>(`/admin/admins/${userId}/role`, {
-      method: "PATCH",
-      body: JSON.stringify({ adminRoleId }),
-      accessToken: token,
-    }),
-
-  adminAccounts: (token: string) =>
-    apiFetch<AdminAccount[]>("/admin/admins", { accessToken: token }),
-
-  createAdmin: (
-    token: string,
-    body: { name: string; email: string; password: string; adminRoleId?: string | null },
-  ) =>
-    apiFetch<AdminAccount>("/admin/admins", {
-      method: "POST",
-      body: JSON.stringify(body),
-      accessToken: token,
-    }),
-
-  uploadBrandLogo: (token: string, file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return apiFetchForm<{ url: string }>("/admin/brand-logo", {
-      method: "POST",
-      body: form,
-      accessToken: token,
-    });
-  },
 
   createBrand: (token: string, body: { companyName: string; companyEmail: string; pocName?: string; pocPhone?: string; pocEmail?: string; logoUrl?: string }) =>
     apiFetch<AdminBrand & { tempPassword: string; companyEmail?: string; pocName?: string; pocPhone?: string; pocEmail?: string }>("/admin/brands", {
@@ -1515,11 +1663,14 @@ export const adminApi = {
       accessToken: token,
     }),
 
-  payoutCreator: (token: string, campaignId: string, creatorId: string) =>
-    apiFetch<PayoutResult>(`/admin/campaigns/${campaignId}/payouts/creator/${creatorId}`, {
-      method: "POST",
-      accessToken: token,
-    }),
+  payoutCreator: (token: string, campaignId: string, creatorId: string, creatorProfileId: string) =>
+    apiFetch<PayoutResult>(
+      `/admin/campaigns/${campaignId}/payouts/creator/${creatorId}?creatorProfileId=${encodeURIComponent(creatorProfileId)}`,
+      {
+        method: "POST",
+        accessToken: token,
+      },
+    ),
 
   // Withdrawal payments (manual fulfilment)
   withdrawals: (token: string, opts: { status?: WithdrawalStatus; cursor?: string } = {}) => {
@@ -1562,14 +1713,32 @@ export const adminApi = {
     });
   },
 
-  // Reports
+  /** Campaign performance report (PDF) and the per-reel ledger (CSV). */
   generateCampaignReport: (token: string, campaignId: string) =>
     apiFetchBlob(`/admin/campaigns/${campaignId}/report`, { accessToken: token }),
-
   downloadCampaignLedger: (token: string, campaignId: string) =>
     apiFetchBlob(`/admin/campaigns/${campaignId}/report/ledger`, { accessToken: token }),
 
   // Pool / intake overrides
+  creatorInstagramInsights: (token: string, creatorId: string, connectionId: string, refresh = false) =>
+    apiFetch<{ report: InstagramAccountInsights; cached: boolean; connected: boolean }>(
+      `/admin/creators/${creatorId}/instagram-insights/${connectionId}${refresh ? "?refresh=1" : ""}`,
+      { accessToken: token },
+    ),
+
+  approveCampaign: (token: string, campaignId: string) =>
+    apiFetch<Campaign>(`/admin/campaigns/${campaignId}/approve`, {
+      method: "POST",
+      accessToken: token,
+    }),
+
+  rejectCampaign: (token: string, campaignId: string, reason: string) =>
+    apiFetch<Campaign>(`/admin/campaigns/${campaignId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      accessToken: token,
+    }),
+
   setClipperIntake: (token: string, campaignId: string, extraClipperAllowance: number) =>
     apiFetch<{
       id: string;
@@ -1600,7 +1769,7 @@ export const staffApi = {
     apiFetch<StaffBrand[]>("/staff/brands", { accessToken: token }),
 
   brand: (token: string, brandId: string) =>
-    apiFetch<AdminBrandDetail>(`/staff/brands/${brandId}`, { accessToken: token }),
+    apiFetch<AdminBrandDetail & { accessLevel?: StaffAccessLevel }>(`/staff/brands/${brandId}`, { accessToken: token }),
 
   createCampaign: (token: string, brandId: string, body: Record<string, unknown>) =>
     apiFetch<Campaign>(`/staff/brands/${brandId}/campaigns`, {

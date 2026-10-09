@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -8,7 +7,7 @@ import {
   ChevronDown,
   Globe2,
   Lightbulb,
-  Loader2,
+  Lock,
   MapPin,
   Upload,
 } from "lucide-react";
@@ -24,11 +23,15 @@ import {
 import { StateMultiSelect } from "@/features/campaigns/components/state-multi-select";
 import { WizardStepper } from "@/features/campaigns/components/wizard-stepper";
 import { useWizardBack } from "@/features/campaigns/hooks/use-wizard-back";
-import { PLATFORM_OPTIONS } from "@/features/campaigns/lib/platform-options";
+import { isPlatformLocked, PLATFORM_OPTIONS } from "@/features/campaigns/lib/platform-options";
 import { normalizeUploadUrl, resolveMediaUrl } from "@/lib/media-url";
 import { adminApi, ApiError, brandApi } from "@/lib/api";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 import { useCampaignWizard } from "@/providers/campaign-wizard";
+import { latestStartDate, startDateProblem, todayInIndia } from "@/features/campaigns/lib/start-date";
+import { checkCoverFile, COVER_ACCEPT } from "@/features/campaigns/lib/upload-rules";
+import { UploadProgressView } from "@/components/ui/upload-progress";
+import type { UploadProgress } from "@/lib/api";
 
 const CATEGORY_OPTIONS = [
   "Fashion",
@@ -45,7 +48,6 @@ const CATEGORY_OPTIONS = [
   "Other",
 ];
 
-const MAX_COVER_BYTES = 50 * 1024 * 1024;
 
 function ValidCheck() {
   return (
@@ -56,13 +58,13 @@ function ValidCheck() {
 }
 
 export function CampaignNewBasicsPage() {
-  const navigate = useNavigate();
-  const { draft, paths, update, saveNow, loading } = useCampaignWizard();
+  const { draft, update, goToStep, loading } = useCampaignWizard();
   const { goBack, backLabel } = useWizardBack();
   const { getToken } = useAuth();
   const { toast } = useToast();
   const coverInputRef = useRef<HTMLInputElement>(null);
   const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverProgress, setCoverProgress] = useState<UploadProgress | null>(null);
   const selectedPlatform = draft.platforms[0];
 
   // "Other" is a picker trigger, not a real stored value — once chosen (or
@@ -94,12 +96,9 @@ export function CampaignNewBasicsPage() {
 
   const onCoverSelected = async (file: File | undefined) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast("Cover must be an image (PNG, JPG, or WEBP).", "error");
-      return;
-    }
-    if (file.size > MAX_COVER_BYTES) {
-      toast("Cover image must be 50MB or smaller.", "error");
+    const problem = checkCoverFile(file);
+    if (problem) {
+      toast(problem, "error");
       return;
     }
     const token = getToken();
@@ -109,7 +108,8 @@ export function CampaignNewBasicsPage() {
     }
     setUploadingCover(true);
     try {
-      const uploaded = await brandApi.campaigns.uploadCoverImage(token, file);
+      setCoverProgress(null);
+      const uploaded = await brandApi.campaigns.uploadCoverImage(token, file, setCoverProgress);
       update({ coverImageUrl: normalizeUploadUrl(uploaded) });
       toast("Cover image uploaded.", "success");
     } catch (error) {
@@ -122,7 +122,12 @@ export function CampaignNewBasicsPage() {
     }
   };
 
-  const hasPlatform = draft.platforms.length > 0;
+  const isDraftCampaign = draft.status === "draft";
+  const startDateError = isDraftCampaign ? startDateProblem(draft.startDate) : null;
+  // A draft saved with a platform that's since been locked must pick again;
+  // campaigns already published keep theirs.
+  const hasPlatform =
+    draft.platforms.length > 0 && !(isDraftCampaign && draft.platforms.some(isPlatformLocked));
   const hasValidLocation =
     draft.locationType === "pan_india" || draft.targetStates.length > 0;
 
@@ -167,28 +172,24 @@ export function CampaignNewBasicsPage() {
                   )}
                 </button>
 
-                <button
-                  type="button"
-                  disabled={uploadingCover}
-                  onClick={() => coverInputRef.current?.click()}
-                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-medium text-foreground transition hover:bg-surface-variant"
-                >
-                  {uploadingCover ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Uploading…
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4" />
-                      {draft.coverImageUrl ? "Replace image" : "Upload image"}
-                    </>
-                  )}
-                </button>
+                {uploadingCover ? (
+                  <div className="mt-3 rounded-xl border border-border px-3 py-2.5">
+                    <UploadProgressView progress={coverProgress} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => coverInputRef.current?.click()}
+                    className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-medium text-foreground transition hover:bg-surface-variant"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {draft.coverImageUrl ? "Replace image" : "Upload image"}
+                  </button>
+                )}
                 <input
                   ref={coverInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept={COVER_ACCEPT}
                   className="hidden"
                   onChange={(e) => void onCoverSelected(e.target.files?.[0])}
                 />
@@ -254,6 +255,8 @@ export function CampaignNewBasicsPage() {
                 </label>
                 <div className="relative">
                   <Input
+                    name="campaign-title"
+                    autoComplete="off"
                     id="title"
                     value={draft.title}
                     onChange={(e) => update({ title: e.target.value })}
@@ -262,6 +265,13 @@ export function CampaignNewBasicsPage() {
                   />
                   {draft.title.trim() && <ValidCheck />}
                 </div>
+                {!draft.title.trim() && (
+                  <p className="text-xs text-muted" role="status">
+                    {draft.campaignId
+                      ? "Campaign name is required — your other changes still save, and the campaign keeps its last name until you type a new one."
+                      : "Give your campaign a name to start saving your progress."}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -303,6 +313,8 @@ export function CampaignNewBasicsPage() {
                 </div>
                 {customCategoryOpen && (
                   <Input
+                    name="campaign-custom-category"
+                    autoComplete="off"
                     value={draft.category}
                     onChange={(e) => update({ category: e.target.value })}
                     placeholder="Enter your category"
@@ -317,20 +329,32 @@ export function CampaignNewBasicsPage() {
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   {PLATFORM_OPTIONS.map(({ value, label, icon: Icon, badge }) => {
                     const isSelected = selectedPlatform === value;
+                    const locked = isPlatformLocked(value);
                     return (
                       <button
                         key={value}
                         type="button"
                         role="radio"
                         aria-checked={isSelected}
+                        aria-disabled={locked}
+                        disabled={locked}
+                        title={locked ? `${label} isn't available yet` : undefined}
                         onClick={() => update({ platforms: [value] })}
                         className={cn(
                           "relative flex flex-col items-center gap-2 rounded-2xl border bg-surface px-3 py-4 transition",
-                          isSelected
-                            ? "border-primary shadow-[0_0_16px_rgba(99,14,212,0.28)] ring-2 ring-primary/25"
-                            : "border-border hover:border-foreground/20",
+                          locked
+                            ? "cursor-not-allowed border-border opacity-50 grayscale"
+                            : isSelected
+                              ? "border-primary shadow-[0_0_16px_rgba(99,14,212,0.28)] ring-2 ring-primary/25"
+                              : "border-border hover:border-foreground/20",
                         )}
                       >
+                        {locked && (
+                          <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-surface-variant px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                            <Lock className="h-2.5 w-2.5" />
+                            Coming soon
+                          </span>
+                        )}
                         {isSelected && (
                           <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
                             <Check className="h-3 w-3" strokeWidth={3} />
@@ -396,9 +420,19 @@ export function CampaignNewBasicsPage() {
                   id="startDate"
                   type="date"
                   value={draft.startDate}
+                  // A campaign that already went live keeps its real (past)
+                  // start date; only drafts are limited to today onwards.
+                  min={isDraftCampaign ? todayInIndia() : undefined}
+                  max={latestStartDate()}
                   onChange={(e) => update({ startDate: e.target.value })}
-                  className="max-w-[220px]"
+                  className={cn("max-w-[220px]", startDateError && "border-destructive/50")}
+                  aria-invalid={Boolean(startDateError)}
                 />
+                {startDateError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {startDateError}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -415,7 +449,9 @@ export function CampaignNewBasicsPage() {
                 id: "next",
                 label: "Next: Brief & Rules",
                 onClick: () => {
-                  void saveNow("brief").then(() => navigate(paths.brief));
+                  void goToStep("brief").then((result) => {
+                    if (!result.ok) toast(result.error, "error");
+                  });
                 },
                 icon: <ArrowRight className="h-4 w-4" />,
                 buttonProps: {
@@ -425,6 +461,7 @@ export function CampaignNewBasicsPage() {
                     !draft.category ||
                     !draft.coverImageUrl ||
                     !draft.startDate ||
+                    Boolean(startDateError) ||
                     !hasPlatform ||
                     !hasValidLocation ||
                     (needsBrandAssignment && !draft.brandProfileId),
