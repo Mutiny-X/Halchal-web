@@ -20,6 +20,7 @@ const SECTIONS: { key: AdminSection; label: string }[] = [
   { key: "faqs", label: "FAQs" },
   { key: "notifications", label: "Notifications" },
   { key: "team", label: "Team" },
+  { key: "payouts", label: "Payouts" },
 ];
 
 const LEVELS: { key: AdminPermissionLevel; label: string }[] = [
