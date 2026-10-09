@@ -74,6 +74,12 @@ function toApiError(res: Response, body: ApiEnvelope<unknown> | null): ApiError 
       ? new ApiError("SERVER_UNAVAILABLE", SERVER_UNAVAILABLE_MESSAGE, res.status)
       : new ApiError("INTERNAL_ERROR", `Request failed (HTTP ${res.status})`, res.status);
   }
+  // An admin-set password is only good for choosing a new one: the API closes
+  // every other route until it's changed, so take the person to where they can.
+  if (body.error?.code === "PASSWORD_CHANGE_REQUIRED" && typeof window !== "undefined") {
+    const target = window.location.pathname.startsWith("/admin") ? "/admin/profile" : "/staff/profile";
+    if (window.location.pathname !== target) window.location.assign(target);
+  }
   return new ApiError(
     body.error?.code ?? "INTERNAL_ERROR",
     body.error?.message ?? "Request failed",
