@@ -60,6 +60,7 @@ import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 import { useAuth, usePortalRole } from "@/providers/auth-provider";
 
+import { isOnDomain } from "@/lib/link-host";
 type Tab = "overview" | "clippers" | "board" | "submissions" | "proof" | "analytics" | "payouts";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -509,7 +510,7 @@ function SubmissionDetailModal({
                 <LinkCard label="Approved work (to compare with the live post)" url={d.draftDriveUrl} />
               )}
 
-              {section === "submissions" && !readOnly && d.draftDriveUrl?.includes("drive.google.com") && (
+              {section === "submissions" && !readOnly && d.draftDriveUrl && isOnDomain(d.draftDriveUrl, "drive.google.com") && (
                 <div className="rounded-xl border border-border bg-surface-variant/50 p-4">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Automated review</p>
                   <p className="mt-1.5 text-sm text-muted">
@@ -834,9 +835,9 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
     onSuccess: (res) => {
       invalidate();
       setConfirmTarget(null);
-      toast(res.paidCount > 0 ? `Marked ${formatInr(res.totalPaidPaise)} as paid across ${res.paidCount} deliverable${res.paidCount === 1 ? "" : "s"}` : "Nothing to mark as paid");
+      toast(res.paidCount > 0 ? `Credited ${formatInr(res.totalPaidPaise)} to creator wallets across ${res.paidCount} deliverable${res.paidCount === 1 ? "" : "s"}` : "Nothing to credit");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to mark as paid", "error"),
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to credit earnings", "error"),
   });
 
   const payCreatorMutation = useMutation({
@@ -845,9 +846,9 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
     onSuccess: (res) => {
       invalidate();
       setConfirmTarget(null);
-      toast(res.paidCount > 0 ? `Marked ${formatInr(res.totalPaidPaise)} as paid` : "Nothing to mark as paid");
+      toast(res.paidCount > 0 ? `Credited ${formatInr(res.totalPaidPaise)} to the creator's wallet` : "Nothing to credit");
     },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to mark as paid", "error"),
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to credit earnings", "error"),
   });
 
   const isMutating = payAllMutation.isPending || payCreatorMutation.isPending;
@@ -871,13 +872,13 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
     <div className="space-y-4">
       <ConfirmDialog
         open={confirmTarget !== null}
-        title={confirmTarget?.type === "all" ? "Mark all as paid?" : `Mark ${confirmTarget?.type === "creator" ? confirmTarget.creatorName : ""} as paid?`}
+        title={confirmTarget?.type === "all" ? "Credit all earnings?" : `Credit ${confirmTarget?.type === "creator" ? confirmTarget.creatorName : ""}'s earnings?`}
         description={
           confirmTarget?.type === "all"
-            ? `Only confirm this once you've manually sent ${formatInr(totalUnpaidPaise)} across ${creatorsWithUnpaid} creator${creatorsWithUnpaid === 1 ? "" : "s"} — this moves it from pending into their Total earned.`
-            : `Only confirm this once you've manually sent ${formatInr(payouts.find((p) => confirmTarget?.type === "creator" && p.creatorProfileId === confirmTarget.creatorProfileId)?.totalUnpaidPaise ?? 0)} to this creator — this moves it from pending into their Total earned.`
+            ? `This adds ${formatInr(totalUnpaidPaise)} to the wallets of ${creatorsWithUnpaid} creator${creatorsWithUnpaid === 1 ? "" : "s"}. No money is sent yet — creators can then withdraw it, and you pay those withdrawals from the Payouts page.`
+            : `This adds ${formatInr(payouts.find((p) => confirmTarget?.type === "creator" && p.creatorProfileId === confirmTarget.creatorProfileId)?.totalUnpaidPaise ?? 0)} to this creator's wallet. No money is sent yet — they can then withdraw it, and you pay it from the Payouts page.`
         }
-        confirmLabel="Mark Paid"
+        confirmLabel="Credit to wallet"
         loading={isMutating}
         onCancel={() => setConfirmTarget(null)}
         onConfirm={() => {
@@ -893,7 +894,7 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
           <p className="mt-0.5 text-xs text-muted">{creatorsWithUnpaid} creator{creatorsWithUnpaid === 1 ? "" : "s"} awaiting payout</p>
         </div>
         <Button disabled={totalUnpaidPaise === 0 || isMutating} onClick={() => setConfirmTarget({ type: "all" })}>
-          Mark All Paid
+          Credit all to wallets
         </Button>
       </div>
 
@@ -908,7 +909,7 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
                 <p className="truncate font-semibold">{p.creatorName}</p>
                 <p className="truncate text-[11px] text-muted">@{p.handle}</p>
                 <p className="text-xs text-muted">
-                  {formatInr(p.totalApprovedPaise)} approved · {formatInr(p.totalPaidPaise)} paid
+                  {formatInr(p.totalApprovedPaise)} approved · {formatInr(p.totalPaidPaise)} credited
                 </p>
               </div>
               {p.totalUnpaidPaise > 0 ? (
@@ -925,11 +926,11 @@ function PayoutsPanel({ campaignId }: { campaignId: string }) {
                     })
                   }
                 >
-                  Mark {formatInr(p.totalUnpaidPaise)} Paid
+                  Credit {formatInr(p.totalUnpaidPaise)}
                 </Button>
               ) : (
                 <span className="shrink-0 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-400">
-                  Fully paid
+                  Fully credited
                 </span>
               )}
             </div>

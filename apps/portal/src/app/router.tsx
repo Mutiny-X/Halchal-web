@@ -66,6 +66,11 @@ const AdminClipperDetailPage = lazy(() =>
     default: m.AdminClipperDetailPage,
   })),
 );
+const AdminPayoutsPage = lazy(() =>
+  import("@/features/admin/pages/AdminPayoutsPage").then((m) => ({
+    default: m.AdminPayoutsPage,
+  })),
+);
 const AdminVerificationsPage = lazy(() =>
   import("@/features/admin/pages/AdminVerificationsPage").then((m) => ({
     default: m.AdminVerificationsPage,
@@ -279,6 +284,10 @@ export const router = createBrowserRouter([
                   {
                     path: "admin/clippers/:id",
                     element: withSuspense(<DetailPageSkeleton />, <AdminClipperDetailPage />),
+                  },
+                  {
+                    path: "admin/payouts",
+                    element: withSuspense(<PortalShellSkeleton />, <AdminPayoutsPage />),
                   },
                   {
                     path: "admin/verifications",

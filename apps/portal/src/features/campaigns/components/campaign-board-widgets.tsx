@@ -31,6 +31,7 @@ import { formatInr } from "@/lib/format";
 import { resolveMediaUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 
+import { isOnDomain } from "@/lib/link-host";
 const PROFILE_PLATFORM_LABELS: Record<string, string> = {
   instagram: "Instagram",
   youtube: "YouTube",
@@ -895,24 +896,26 @@ export function MediaPreview({ label, url }: { label: string; url: string }) {
     return <PreviewLabel label={label}><img src={url} alt={label} className="max-h-[420px] w-full rounded-xl border border-border bg-black object-contain" /></PreviewLabel>;
   }
 
-  if (parsed.hostname.includes("drive.google.com")) {
+  // Hosts are matched exactly (see isOnDomain): a look-alike address must
+  // never be embedded inside the admin portal.
+  if (isOnDomain(parsed, "drive.google.com")) {
     const fileId = url.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? parsed.searchParams.get("id");
     if (fileId) return <PreviewLabel label={label}><IframePreview src={`https://drive.google.com/file/d/${fileId}/preview`} /></PreviewLabel>;
   }
 
-  if (parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtu.be")) {
+  if (isOnDomain(parsed, "youtube.com", "youtu.be")) {
     let videoId: string | null = null;
-    if (parsed.hostname.includes("youtu.be")) videoId = parsed.pathname.slice(1);
+    if (isOnDomain(parsed, "youtu.be")) videoId = parsed.pathname.slice(1);
     else if (parsed.pathname.startsWith("/shorts/")) videoId = parsed.pathname.split("/")[2];
     else videoId = parsed.searchParams.get("v");
-    if (videoId) return <PreviewLabel label={label}><IframePreview src={`https://www.youtube.com/embed/${videoId}`} /></PreviewLabel>;
+    if (videoId && /^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return <PreviewLabel label={label}><IframePreview src={`https://www.youtube.com/embed/${videoId}`} /></PreviewLabel>;
   }
 
-  if (parsed.hostname.includes("instagram.com")) {
+  if (isOnDomain(parsed, "instagram.com")) {
     return <PreviewLabel label={label}><InstagramEmbed url={url} /></PreviewLabel>;
   }
 
-  if (parsed.hostname.includes("twitter.com") || parsed.hostname.includes("x.com")) {
+  if (isOnDomain(parsed, "twitter.com", "x.com")) {
     return <PreviewLabel label={label}><TwitterEmbed url={url} /></PreviewLabel>;
   }
 

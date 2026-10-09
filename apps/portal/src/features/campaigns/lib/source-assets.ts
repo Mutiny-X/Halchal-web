@@ -1,3 +1,4 @@
+import { isOnDomain } from "@/lib/link-host";
 export type SourceAssetType = "drive" | "youtube" | "upload";
 
 export type SourceAsset = {
@@ -8,14 +9,7 @@ export type SourceAsset = {
 };
 
 export function inferSourceAssetType(url: string): SourceAssetType {
-  const lower = url.trim().toLowerCase();
-  if (
-    lower.includes("youtube.com") ||
-    lower.includes("youtu.be")
-  ) {
-    return "youtube";
-  }
-  return "drive";
+  return isOnDomain(url, "youtube.com", "youtu.be") ? "youtube" : "drive";
 }
 
 export function createSourceAsset(

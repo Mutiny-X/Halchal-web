@@ -783,6 +783,8 @@ export type AdminCreatorWithdrawal = {
   status: string;
   createdAt: string;
   processedAt: string | null;
+  utr: string | null;
+  failureReason: string | null;
 };
 
 export type AdminCreatorPan = {
@@ -1024,9 +1026,51 @@ export type AdminSection =
   | "tickets"
   | "faqs"
   | "notifications"
-  | "team";
+  | "team"
+  | "payouts";
 
 export type AdminPermissionLevel = "hidden" | "view" | "manage";
+
+export type WithdrawalStatus = "pending" | "processing" | "completed" | "failed";
+
+/** One creator withdrawal in the payments queue. Account numbers are never
+ * included here — they appear only in the downloaded Excel sheet. */
+export type AdminWithdrawal = {
+  id: string;
+  createdAt: string;
+  creator: { id: string; name: string; phone: string | null; email: string | null };
+  amountPaise: number;
+  feePaise: number;
+  netPaise: number;
+  status: WithdrawalStatus;
+  batchId: string | null;
+  exportedAt: string | null;
+  processedAt: string | null;
+  utr: string | null;
+  failureReason: string | null;
+  method: {
+    type: string | null;
+    label: string | null;
+    accountMasked: string | null;
+    bankName: string | null;
+  };
+};
+
+export type AdminWithdrawalList = {
+  items: AdminWithdrawal[];
+  nextCursor: string | null;
+  counts: Record<WithdrawalStatus, { count: number; netPaise: number }>;
+};
+
+export type WithdrawalImportResult = {
+  summary: { paid: number; failed: number; skipped: number; errors: number };
+  results: {
+    row: number;
+    withdrawalId: string;
+    result: "paid" | "failed" | "skipped" | "error";
+    message?: string;
+  }[];
+};
 
 export type EffectiveAdminPermissions = {
   isSuperAdmin: boolean;
@@ -1386,6 +1430,20 @@ export const adminApi = {
   creator: (token: string, id: string) =>
     apiFetch<AdminCreatorDetail>(`/admin/creators/${id}`, { accessToken: token }),
 
+  /** Blocks a creator's account: no sign-in, every session ended. */
+  suspendCreator: (token: string, id: string, reason?: string) =>
+    apiFetch<{ suspended: boolean }>(`/admin/creators/${id}/suspend`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      accessToken: token,
+    }),
+
+  reinstateCreator: (token: string, id: string) =>
+    apiFetch<{ reinstated: boolean }>(`/admin/creators/${id}/reinstate`, {
+      method: "POST",
+      accessToken: token,
+    }),
+
   reviewKyc: (token: string, id: string, action: "approve" | "reject", reason?: string) =>
     apiFetch<{ id: string; kycStatus: KycStatus }>(`/admin/creators/${id}/kyc-review`, {
       method: "POST",
@@ -1607,6 +1665,47 @@ export const adminApi = {
         accessToken: token,
       },
     ),
+
+  // Withdrawal payments (manual fulfilment)
+  withdrawals: (token: string, opts: { status?: WithdrawalStatus; cursor?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set("status", opts.status);
+    if (opts.cursor) q.set("cursor", opts.cursor);
+    const qs = q.toString();
+    return apiFetch<AdminWithdrawalList>(`/admin/withdrawals${qs ? `?${qs}` : ""}`, { accessToken: token });
+  },
+
+  /** Builds the payment sheet from every new request and marks those rows as
+   * sent to accounts. A POST because it changes state. Returns the .xlsx. */
+  exportWithdrawals: (token: string) =>
+    apiFetchBlob("/admin/withdrawals/export", { method: "POST", accessToken: token }),
+
+  downloadWithdrawalBatch: (token: string, batchId: string) =>
+    apiFetchBlob(`/admin/withdrawals/batches/${batchId}/download`, { accessToken: token }),
+
+  markWithdrawalPaid: (token: string, id: string, utr: string) =>
+    apiFetch<{ id: string; status: WithdrawalStatus; alreadyDone: boolean }>(`/admin/withdrawals/${id}/paid`, {
+      method: "POST",
+      accessToken: token,
+      body: JSON.stringify({ utr }),
+    }),
+
+  markWithdrawalFailed: (token: string, id: string, reason: string) =>
+    apiFetch<{ id: string; status: WithdrawalStatus }>(`/admin/withdrawals/${id}/failed`, {
+      method: "POST",
+      accessToken: token,
+      body: JSON.stringify({ reason }),
+    }),
+
+  importWithdrawalResults: (token: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return apiFetchForm<WithdrawalImportResult>("/admin/withdrawals/import", {
+      method: "POST",
+      accessToken: token,
+      body: form,
+    });
+  },
 
   /** Campaign performance report (PDF) and the per-reel ledger (CSV). */
   generateCampaignReport: (token: string, campaignId: string) =>
