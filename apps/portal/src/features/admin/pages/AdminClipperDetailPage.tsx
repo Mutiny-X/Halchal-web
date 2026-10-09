@@ -86,6 +86,13 @@ const WITHDRAWAL_STATUS_STYLE: Record<string, string> = {
   failed: "bg-destructive/15 text-destructive",
 };
 
+const WITHDRAWAL_STATUS_LABEL: Record<string, string> = {
+  pending: "Requested",
+  processing: "Sent to accounts",
+  completed: "Paid",
+  failed: "Failed",
+};
+
 /* ── Campaign card ── */
 function CampaignCard({ entry }: { entry: AdminCreatorCampaignEntry }) {
   return (
@@ -722,11 +729,15 @@ export function AdminClipperDetailPage() {
                           WITHDRAWAL_STATUS_STYLE[w.status] ?? "bg-surface-variant text-muted",
                         )}
                       >
-                        {w.status}
+                        {WITHDRAWAL_STATUS_LABEL[w.status] ?? w.status}
                       </span>
                       {w.processedAt && (
-                        <p className="mt-1 text-[11px] text-muted">Processed {formatDate(w.processedAt)}</p>
+                        <p className="mt-1 text-[11px] text-muted">
+                          {w.status === "failed" ? "Failed" : "Paid"} {formatDate(w.processedAt)}
+                        </p>
                       )}
+                      {w.utr && <p className="mt-0.5 text-[11px] text-muted">UTR {w.utr}</p>}
+                      {w.failureReason && <p className="mt-0.5 text-[11px] text-destructive">{w.failureReason}</p>}
                     </div>
                   </div>
                 ))}
